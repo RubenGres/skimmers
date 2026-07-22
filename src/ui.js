@@ -33,8 +33,6 @@ export const els = {
   againBtn: $("again-btn"),
   throwHint: $("throw-hint"),
   throwUi: $("throw-ui"),
-  modeSkip: $("mode-skip"),
-  modeSplash: $("mode-splash"),
   wipe: $("wipe"),
   muter: $("muter"),
 };

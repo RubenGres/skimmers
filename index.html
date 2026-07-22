@@ -154,16 +154,11 @@
     position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);
     display: flex; flex-direction: column; align-items: center; gap: 10px;
   }
-  #mode-toggle { display: flex; gap: 0; border-radius: 30px; overflow: hidden; border: 3px solid var(--ink);
-    box-shadow: 0 4px 0 rgba(0,0,0,0.4); pointer-events: auto; }
-  #mode-toggle button {
-    border: none; font-family: inherit; font-weight: 900; font-size: 14px; letter-spacing: 0.08em;
-    padding: 9px 22px; cursor: pointer; background: var(--paper); color: var(--ink); text-transform: uppercase;
-  }
-  #mode-toggle button.sel { background: var(--accent); color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
-  #mode-toggle button#mode-splash.sel { background: var(--danger); }
   #throw-hint { font-size: 13px; font-weight: 700; color: var(--paper); text-shadow: 0 2px 4px rgba(0,0,0,0.7);
-    background: rgba(10,42,61,0.55); padding: 4px 14px; border-radius: 16px; }
+    background: rgba(10,42,61,0.55); padding: 6px 16px; border-radius: 16px;
+    pointer-events: auto; cursor: pointer; transition: background 0.2s, transform 0.1s; }
+  #throw-hint:active { transform: scale(0.96); }
+  #throw-hint.splash { background: rgba(255,84,112,0.85); text-shadow: 0 1px 3px rgba(0,0,0,0.5); }
 
   /* combo popups + floating text */
   #popups { z-index: 25; overflow: hidden; }
@@ -280,6 +275,14 @@
   /* vignette + subtle grade */
   #vignette { z-index: 5; background: radial-gradient(ellipse at 50% 45%, transparent 55%, rgba(6,22,36,0.42) 100%); }
 
+  /* underwater grade: deep blue tint + canvas wobble while the camera is submerged */
+  #underwater-tint {
+    z-index: 6; opacity: 0; transition: opacity 0.6s ease;
+    background: radial-gradient(ellipse at 50% 35%, rgba(10,60,110,0.28) 0%, rgba(4,24,52,0.6) 100%);
+  }
+  body.underwater #underwater-tint { opacity: 1; }
+  body.underwater #c { filter: url(#underwaterFilter) saturate(1.15) brightness(0.92); }
+
   /* flash */
   #flash { z-index: 28; opacity: 0; background: #fff; transition: opacity 0.25s ease-out; }
 
@@ -292,6 +295,18 @@
 <canvas id="c"></canvas>
 
 <div id="vignette" class="layer"></div>
+<div id="underwater-tint" class="layer"></div>
+
+<!-- wobbling displacement filter applied to the canvas while submerged -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <filter id="underwaterFilter" x="-5%" y="-5%" width="110%" height="110%">
+    <feTurbulence type="fractalNoise" baseFrequency="0.008 0.018" numOctaves="2" seed="7" result="noise">
+      <animate attributeName="baseFrequency" dur="9s"
+        values="0.008 0.018;0.012 0.027;0.008 0.018" repeatCount="indefinite"/>
+    </feTurbulence>
+    <feDisplacementMap in="SourceGraphic" in2="noise" scale="16" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+</svg>
 <div id="flash" class="layer"></div>
 <div id="popups" class="layer"></div>
 <div id="banner"></div>
@@ -309,10 +324,6 @@
   <canvas id="minimap" width="190" height="190"></canvas>
   <div id="throw-ui">
     <div id="throw-hint">drag back &amp; release to skip</div>
-    <div id="mode-toggle">
-      <button id="mode-skip" class="sel">🪨 Skip</button>
-      <button id="mode-splash">💥 Splash</button>
-    </div>
   </div>
 </div>
 

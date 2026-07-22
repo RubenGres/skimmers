@@ -74,7 +74,8 @@ const HOLES = [
     islands: [{ x: -27, z: 6, r: 3.4 }],
     rocks: [
       { x: 4, z: 6, r: 5.5, h: 9 }, { x: 12, z: 22, r: 4.5, h: 8 },
-      { x: -3, z: -13, r: 4.2, h: 7 },
+      { x: -3, z: -13, r: 4.2, h: 7 }, { x: 9, z: 14, r: 4, h: 8 },
+      { x: 5, z: -26, r: 4, h: 8 }, { x: 18, z: 30, r: 4, h: 7 },
     ],
   },
   {
@@ -87,7 +88,8 @@ const HOLES = [
     islands: [{ x: 12, z: -34, r: 3.2 }, { x: 40, z: 6, r: 3.6 }],
     rocks: [
       { x: -14, z: 2, r: 6, h: 9 }, { x: 2, z: 11, r: 5, h: 8 },
-      { x: -3, z: -11, r: 4.5, h: 7 },
+      { x: -3, z: -11, r: 4.5, h: 7 }, { x: -26, z: -8, r: 4.5, h: 8 },
+      { x: -4, z: 22, r: 4.5, h: 8 }, { x: 10, z: 0, r: 4, h: 7 },
     ],
   },
   {
@@ -102,6 +104,8 @@ const HOLES = [
     rocks: [
       { x: 34, z: -2, r: 5.5, h: 9 }, { x: 25, z: 11, r: 4.5, h: 8 },
       { x: 15, z: -13, r: 4.5, h: 7 }, { x: 0, z: 4, r: 5, h: 8 },
+      { x: 25, z: -9, r: 4.5, h: 8 }, { x: 8, z: -3, r: 4, h: 7.5 },
+      { x: 12, z: 14, r: 4, h: 7 },
     ],
   },
 ];
@@ -1057,14 +1061,17 @@ function setupHole(idx) {
 
 function setThrowMode(mode) {
   G.throwMode = mode;
-  ui.els.modeSkip.classList.toggle("sel", mode === "skip");
-  ui.els.modeSplash.classList.toggle("sel", mode === "splash");
+  ui.els.throwHint.classList.toggle("splash", mode === "splash");
   ui.setThrowHint(mode === "skip"
-    ? "drag back & release — flat + fast chains hops"
-    : "lob it at a rival stone — knock 'em under! (X to switch)");
+    ? "drag back & release · tap here or press X for 💥 splash"
+    : "💥 SPLASH — lob at a rival to sink them · tap to skip again");
 }
-ui.els.modeSkip.addEventListener("click", () => { audio.pip(true); setThrowMode("skip"); });
-ui.els.modeSplash.addEventListener("click", () => { audio.pip(false); setThrowMode("splash"); });
+// the hint pill doubles as the mode toggle (touch-friendly, no chrome)
+ui.els.throwHint.addEventListener("pointerdown", (e) => {
+  e.stopPropagation();
+  audio.pip(G.throwMode === "splash");
+  setThrowMode(G.throwMode === "skip" ? "splash" : "skip");
+});
 
 // ------------------------------------------------------------------ skimmer events -> juice
 function onSkimmerEvent(type, data) {
@@ -1635,6 +1642,14 @@ function frame(now) {
 
   camUpdate(rawDt); // camera on real time so slow-mo still feels smooth
   applyShake(shakeRig, rawDt, G.elapsed);
+
+  // submerged? dark-blue grade + wobble filter on the canvas
+  const under = camRig.position.y < -0.15;
+  if (under !== G._underwater) {
+    G._underwater = under;
+    document.body.classList.toggle("underwater", under);
+  }
+
   renderer.render(scene, camera);
 }
 
