@@ -26,7 +26,7 @@ find a rock → shape it → paint it → skip battle
 | Verb | How |
 |---|---|
 | **Skip** | drag back & release — drag length is power, sideways drag steers. Flat + fast throws chain hops. |
-| **Splash** | tap the hint pill (or press `X`) and lob your stone at a rival — knock theirs under and they have to fish it back |
+| **Splash** | tap the SKIP/SPLASH pill (or press `X`) and lob your stone at a rival — knock theirs under and they have to fish it back |
 | **Fish** | sank it? the camera dives underwater — steer the descending hook past the fish to your rock. Every fish you bump shoves the hook back up and costs you distance |
 | **Island stop** | land on an island and you throw from dry sand — no drowning, no fishing |
 | **Ferry** | land *in* a rowboat and it carries your stone across the lake |

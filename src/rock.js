@@ -162,14 +162,33 @@ export class Rock {
     this.initialLumpSum = this.groups.reduce((s, g) => s + g.lump, 0) || 1;
     this.lumpAmp = lumpAmp;
 
-    // spherical UVs for the painted skin
+    // Spherical UVs for the painted skin, assigned PER FACE (the icosahedron
+    // buffer is non-indexed, so faces don't share attribute slots). Faces that
+    // straddle the atan2 seam get their low-side u shifted +1 — otherwise u
+    // interpolates from ~1.0 back through 0 and smears the whole texture
+    // across a vertical stripe. Pole vertices take the face-average u so the
+    // caps don't pinwheel. (Texture wrapS is Repeat, so u > 1 is fine.)
     const uvs = new Float32Array(pos.count * 2);
-    for (const g of this.groups) {
-      const u = Math.atan2(g.dir.z, g.dir.x) / (Math.PI * 2) + 0.5;
-      const v = g.dir.y * 0.5 + 0.5;
-      for (const vi of g.verts) {
-        uvs[vi * 2] = u;
-        uvs[vi * 2 + 1] = v;
+    const fd = new THREE.Vector3();
+    for (let f = 0; f < pos.count; f += 3) {
+      const us = [], vs = [];
+      for (let k = 0; k < 3; k++) {
+        fd.fromBufferAttribute(pos, f + k).normalize();
+        us.push(Math.atan2(fd.z, fd.x) / (Math.PI * 2) + 0.5);
+        vs.push(fd.y * 0.5 + 0.5);
+      }
+      if (Math.max(...us) - Math.min(...us) > 0.5) {
+        for (let k = 0; k < 3; k++) if (us[k] < 0.5) us[k] += 1;
+      }
+      for (let k = 0; k < 3; k++) {
+        if (vs[k] > 0.99 || vs[k] < 0.01) {
+          const o = [0, 1, 2].filter((i) => i !== k);
+          us[k] = (us[o[0]] + us[o[1]]) / 2;
+        }
+      }
+      for (let k = 0; k < 3; k++) {
+        uvs[(f + k) * 2] = us[k];
+        uvs[(f + k) * 2 + 1] = vs[k];
       }
     }
     geo.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
@@ -185,6 +204,7 @@ export class Rock {
     this.strokeCtx = this.strokeCanvas.getContext("2d");
     this.tex = new THREE.CanvasTexture(this.texCanvas);
     this.tex.colorSpace = THREE.SRGBColorSpace;
+    this.tex.wrapS = THREE.RepeatWrapping; // seam faces sample u > 1
     drawRockBase(this.texCtx, color, pattern);
 
     this.mat = new THREE.MeshStandardMaterial({

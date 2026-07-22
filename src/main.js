@@ -450,7 +450,9 @@ ui.els.playBtn.addEventListener("click", () => {
 
 ui.els.muter.addEventListener("click", () => {
   audio.setMuted(!audio.muted);
-  ui.els.muter.textContent = audio.muted ? "muted" : "snd";
+  ui.els.muter.classList.toggle("muted", audio.muted);
+  document.getElementById("ic-sound").classList.toggle("hidden", audio.muted);
+  document.getElementById("ic-muted").classList.toggle("hidden", !audio.muted);
 });
 
 // ------------------------------------------------------------------ multiplayer
@@ -756,7 +758,7 @@ const beachSpot = (() => {
 
 function enterFind() {
   G.state = "find";
-  ui.showPhase("FIND YOUR ROCK", "click a rock to size it up");
+  ui.showPhase("FIND YOUR ROCK", "five contenders washed ashore");
   ui.els.phaseNext.textContent = "Shape it →";
 
   // scatter candidates on the beach
@@ -914,7 +916,7 @@ function enterShape() {
   });
   G.candidates = [G.playerRock];
 
-  ui.showPhase("SHAPE IT", "hold & rub the stone to grind it flat — thinner skips better, but sinks easier");
+  ui.showPhase("SHAPE IT", "flat skips far · thin sinks fast");
   ui.els.phaseNext.textContent = "Paint it →";
   ui.els.phaseNext.classList.remove("hidden");
   ui.showStats(G.playerRock.flat, G.playerRock.heft, G.playerRock.grit);
@@ -949,7 +951,7 @@ function enterPaint() {
   G.state = "paint";
   G.brushColor = ROCK_COLORS[1];
   G.paintDrag.spinVel = 0.5;
-  ui.showPhase("PAINT IT", "drag the stone to paint it · drag the water to spin it around");
+  ui.showPhase("PAINT IT", "make it yours — the lake will judge you");
   ui.els.phaseNext.textContent = "To the lake! →";
   ui.els.rockStats.classList.add("hidden");
   ui.buildPaintUI(
@@ -1062,9 +1064,7 @@ function setupHole(idx) {
 function setThrowMode(mode) {
   G.throwMode = mode;
   ui.els.throwHint.classList.toggle("splash", mode === "splash");
-  ui.setThrowHint(mode === "skip"
-    ? "drag back & release · tap here or press X for SPLASH mode"
-    : "SPLASH MODE — lob at a rival to sink them · tap to skip again");
+  ui.setThrowHint(mode === "skip" ? "SKIP" : "SPLASH");
 }
 // the hint pill doubles as the mode toggle (touch-friendly, no chrome)
 ui.els.throwHint.addEventListener("pointerdown", (e) => {
@@ -1172,7 +1172,7 @@ function onSkimmerEvent(type, data) {
     case "deckLand": {
       audio.deckLand();
       if (mine) {
-        ui.banner("FERRY RIDE!", "the rowboat carries your stone — throw when ready", 2.2);
+        ui.banner("FERRY RIDE!", "the rowboat carries your stone", 2.2);
         cam.mode = "aim";
         G.throwCooldown = 0.4;
         resetAim();
@@ -1204,7 +1204,7 @@ function onSkimmerEvent(type, data) {
       const sc = worldToScreen(data.at);
       if (mine) {
         if (!sc.behind) ui.popup(sc.x, sc.y - 20, "ISLAND STOP!", { size: 28, color: "#6fe07a" });
-        ui.banner("SAFE ON SAND", "dry land — throw again whenever, no fishing here", 1.6);
+        ui.banner("SAFE ON SAND", "no fishing on dry land", 1.6);
         cam.mode = "aim";
         G.throwCooldown = 0.4;
         resetAim();

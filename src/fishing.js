@@ -48,8 +48,13 @@ export class Fishing {
 
     // UI
     this.el = document.getElementById("fishing-ui");
-    this.hintEl = document.getElementById("fishing-hint");
     this.catchesEl = document.getElementById("fishing-catches");
+
+    // fake pendulum state for the line/hook swing
+    this.swingAng = 0;
+    this.swingVel = 0;
+    this.anchorX = 0;
+    this.prevHookX = 0;
 
     // ---------- diorama (built once, hidden) ----------
     const g = new THREE.Group();
@@ -185,6 +190,10 @@ export class Fishing {
 
     this.hookX = 0;
     this.hookY = HOOK_START;
+    this.swingAng = 0;
+    this.swingVel = 0;
+    this.anchorX = 0;
+    this.prevHookX = 0;
     for (const f of this.fish) {
       f.mesh.position.set((Math.random() - 0.5) * f.xr * 2, f.y, (Math.random() - 0.5) * 1.2);
       f.scare = 0;
@@ -192,9 +201,7 @@ export class Fishing {
 
     this.el.classList.remove("hidden");
     els.throwUi.classList.add("hidden");
-    this.hintEl.textContent = "steer the hook down to your rock — don't touch the fish!";
     this.catchesEl.textContent = "";
-    audio.sink; // (splash already played by the sink event)
   }
 
   /** camera pose for main's "fishing" mode — aquarium side view */
@@ -241,6 +248,13 @@ export class Fishing {
       f.mesh.rotation.z = Math.sin(elapsed * 6 + f.phase) * 0.08;
     }
 
+    // ---- fake pendulum: steering drags the hook, the line lags and swings
+    const steerVel = (this.hookX - this.prevHookX) / Math.max(dt, 1e-4);
+    this.prevHookX = this.hookX;
+    this.swingVel += (-this.swingAng * 24 - this.swingVel * 3 - steerVel * 0.85) * dt;
+    this.swingAng += this.swingVel * dt;
+    const dispX = this.hookX + Math.sin(this.swingAng) * 1.15;
+
     if (this.phase === "drop") {
       // steer + descend
       const targetX = (pointerX01 - 0.5) * 2 * STEER_RANGE * 0.55;
@@ -251,9 +265,9 @@ export class Fishing {
         audio.reelTick();
       }
 
-      // fish collisions shove the hook back up
+      // fish collisions shove the hook back up (tested against the SWUNG position)
       for (const f of this.fish) {
-        const dx = f.mesh.position.x - this.hookX;
+        const dx = f.mesh.position.x - dispX;
         const dy = f.mesh.position.y - this.hookY;
         if (Math.abs(dx) < 0.85 && Math.abs(dy) < 0.5) {
           this.hits++;
@@ -261,22 +275,21 @@ export class Fishing {
           this._tickY = this.hookY;
           f.scare = 1.4;
           f.speed = Math.abs(f.speed) * Math.sign(dx || 1); // dart away from the hook
+          this.swingVel += (Math.random() - 0.5) * 8; // the bump sets the line swinging
           audio.fishMiss();
           this.rock.kickEyes(1);
           this.catchesEl.textContent = `fish bumps: ${this.hits}`;
-          this.hintEl.textContent = ["ow! fish!", "shoo!", "they bite!", "not the fish!"][this.hits % 4];
           const wp = this.group.position;
-          this.particles.glow.emit(wp.x + this.hookX, FLOOR_Y + this.hookY, wp.z, dx * 2, 1, 0,
+          this.particles.glow.emit(wp.x + dispX, FLOOR_Y + this.hookY, wp.z, dx * 2, 1, 0,
             0.4, 5, 1.0, 0.6, 0.3, 2, 1);
         }
       }
 
       // reached the rock?
       if (this.hookY <= ROCK_Y + 0.55) {
-        if (Math.abs(this.hookX) < 1.15) {
+        if (Math.abs(dispX) < 1.15) {
           this.phase = "reel";
           audio.catchRock();
-          this.hintEl.textContent = "GOT IT! reeling...";
           this.rock.kickEyes(2);
           this.rock.squashKick?.(1);
         } else {
@@ -287,11 +300,11 @@ export class Fishing {
       this.hookY += 7.5 * dt;
       this.hookX *= 1 - Math.min(1, 6 * dt);
       this.rock.group.position.set(
-        this.group.position.x + this.hookX,
+        this.group.position.x + dispX,
         FLOOR_Y + this.hookY - 0.5,
         this.group.position.z
       );
-      this.rock.group.rotation.z = Math.sin(this.hookY * 2) * 0.15;
+      this.rock.group.rotation.z = this.swingAng * 0.6 + Math.sin(this.hookY * 2) * 0.1;
       if (Math.random() < 0.4) {
         this.particles.glow.emit(
           this.rock.group.position.x, this.rock.group.position.y, this.rock.group.position.z,
@@ -301,14 +314,19 @@ export class Fishing {
       if (this.hookY >= HOOK_START + 3) this._finish(this.hits === 0);
     }
 
-    // hook + line transforms (local -> world via group)
-    this.hook.position.set(this.hookX, this.hookY, 0);
-    this.hook.rotation.z = (this.hookX / STEER_RANGE) * 0.4;
+    // hook + line transforms: the line hangs from a lazily-following anchor
+    // and tilts to meet the swinging hook, so the whole rig reads as rope
+    this.anchorX += (dispX * 0.85 - this.anchorX) * Math.min(1, 3.2 * dt);
+    this.hook.position.set(dispX, this.hookY, 0);
+    this.hook.rotation.z = this.swingAng * 1.25;
     const lineTop = HOOK_START + 14;
-    const lineLen = lineTop - this.hookY - 0.45;
+    const hookTopY = this.hookY + 0.45;
+    const ldx = dispX - this.anchorX;
+    const ldy = lineTop - hookTopY;
+    const lineLen = Math.hypot(ldx, ldy);
     this.lineMesh.scale.y = lineLen;
-    this.lineMesh.position.set(this.hookX * 0.92, this.hookY + 0.45 + lineLen / 2, 0);
-    this.lineMesh.rotation.z = -(this.hookX / STEER_RANGE) * 0.06;
+    this.lineMesh.position.set((this.anchorX + dispX) / 2, (lineTop + hookTopY) / 2, 0);
+    this.lineMesh.rotation.z = Math.atan2(ldx, ldy);
   }
 
   _finish(clean) {
