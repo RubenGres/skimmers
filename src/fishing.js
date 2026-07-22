@@ -11,7 +11,7 @@ import { lakeDepthAt } from "./water.js";
 import { els } from "./ui.js";
 
 const ROCK_Y = 0.55; // local y of the rock on the bed
-const HOOK_SPEED = 2.0;
+export const HOOK_SPEED = 2.0;
 const STEER_RANGE = 8.5;
 
 const FISH_COLORS = [0xffa63d, 0x37c8e0, 0xff5470, 0x9d7cf4, 0xffd24a, 0x6fe07a];

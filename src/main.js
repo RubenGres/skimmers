@@ -1373,12 +1373,15 @@ function startReplay(s) {
   // tape, starting at the winner's final throw
   const racers = [...G.racers];
   const wIdx = racers.indexOf(s);
-  let startIdx = 0;
+  let throwFrame = 0;
   for (let i = G.raceTapeEvents.length - 1; i >= 0; i--) {
     const e = G.raceTapeEvents[i];
-    if (e.type === "throw" && e.who === s) { startIdx = e.frame; break; }
+    if (e.type === "throw" && e.who === s) { throwFrame = e.frame; break; }
   }
-  const frames = G.raceTape.slice(Math.max(0, startIdx));
+  // lead in ~0.5s before the throw, and never replay less than ~1.7s of tape
+  // (short putt wins otherwise blink past)
+  const startIdx = Math.max(0, Math.min(throwFrame - 30, G.raceTape.length - 100));
+  const frames = G.raceTape.slice(startIdx);
   if (frames.length < 30 || wIdx < 0 || frames[0].length < racers.length * 4) {
     after(1.2, nextHoleOrResults);
     return;

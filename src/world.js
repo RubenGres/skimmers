@@ -5,6 +5,7 @@
  * Lighting per the mood-lighting-rig scrap: warm key, cool fill, low ambient.
  */
 import * as THREE from "three";
+import { HOOK_SPEED } from "./fishing.js";
 import { LAKE_R, WATER_Y, lakeDepthAt } from "./water.js";
 
 const INK = 0x16324a;
@@ -307,6 +308,14 @@ class Duck {
     body.scale.set(1.25, 0.8, 0.9);
     body.position.y = 0.22;
     this.group.add(body);
+    this.wings = [];
+    for (const side of [-1, 1]) {
+      const wing = new THREE.Mesh(new THREE.SphereGeometry(0.3, 7, 5), bodyMat);
+      wing.scale.set(1.05, 0.18, 0.7);
+      wing.position.set(-0.05, 0.33, side * 0.38);
+      this.group.add(wing);
+      this.wings.push(wing);
+    }
     const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 8, 6), bodyMat);
     head.position.set(0.42, 0.62, 0);
     this.group.add(head);
@@ -326,15 +335,49 @@ class Duck {
     this.speed = 0.7 + Math.random() * 0.6;
     this.turnT = 2 + Math.random() * 3;
     this.scare = 0;
+    this.flying = false;
+    this.flyT = 0;
+    this.flySpeed = 0;
+    this.respawnT = 0;
   }
 
   update(dt, elapsed, water) {
+    if (!this.group.visible) {
+      this.respawnT -= dt;
+      if (this.respawnT <= 0) {
+        const a = Math.random() * Math.PI * 2;
+        const r = LAKE_R * (0.3 + Math.random() * 0.5);
+        this.group.position.set(Math.cos(a) * r, WATER_Y, Math.sin(a) * r);
+        this.heading = Math.random() * Math.PI * 2;
+        this.flying = false;
+        this.group.visible = true;
+      }
+      return;
+    }
+
+    const p = this.group.position;
+    if (this.flying) {
+      this.flyT += dt;
+      p.x += Math.cos(this.heading) * this.flySpeed * dt;
+      p.z += Math.sin(this.heading) * this.flySpeed * dt;
+      p.y += (2.8 + this.flyT * 1.4) * dt;
+      this.group.rotation.y = -this.heading;
+      this.group.rotation.z = Math.sin(elapsed * 18) * 0.12;
+      const flap = Math.sin(elapsed * 28) * 1.05;
+      this.wings[0].rotation.x = flap;
+      this.wings[1].rotation.x = -flap;
+      if (this.flyT > 2.2) {
+        this.group.visible = false;
+        this.respawnT = 4 + Math.random() * 3;
+      }
+      return;
+    }
+
     this.turnT -= dt;
     if (this.turnT <= 0) {
       this.turnT = 2 + Math.random() * 4;
       this.heading += (Math.random() - 0.5) * 1.6;
     }
-    const p = this.group.position;
     // stay in the lake
     const r = Math.hypot(p.x, p.z);
     if (r > LAKE_R * 0.85) {
@@ -347,14 +390,33 @@ class Duck {
     p.y = WATER_Y + water.heightAt(p.x, p.z, elapsed) + 0.02;
     this.group.rotation.y = -this.heading;
     this.group.rotation.z = Math.sin(elapsed * 3 + p.x) * 0.06;
+    this.wings[0].rotation.x = 0;
+    this.wings[1].rotation.x = 0;
   }
 
   scareFrom(pos) {
+    if (this.flying || !this.group.visible) return;
     const d = this.group.position.distanceTo(pos);
     if (d < 9) {
       this.scare = 1;
       this.heading = Math.atan2(this.group.position.z - pos.z, this.group.position.x - pos.x);
     }
+  }
+
+  flyAway(from, incomingVel) {
+    if (this.flying || !this.group.visible) return false;
+    let dx = this.group.position.x - from.x;
+    let dz = this.group.position.z - from.z;
+    if (dx * dx + dz * dz < 0.01) {
+      dx = incomingVel.x || 1;
+      dz = incomingVel.z;
+    }
+    this.heading = Math.atan2(dz, dx);
+    this.flySpeed = 7 + Math.min(5, Math.hypot(incomingVel.x, incomingVel.z) * 0.2);
+    this.flyT = 0;
+    this.scare = 1;
+    this.flying = true;
+    return true;
   }
 }
 
@@ -502,6 +564,7 @@ export class CourseMarkers {
 export class RivalLines {
   constructor(scene) {
     this.rigs = [];
+    this.dropYs = new Map();
     const lineMat = new THREE.MeshBasicMaterial({ color: 0xe8e8e8 });
     const redMat = new THREE.MeshStandardMaterial({ color: 0xd94040, flatShading: true });
     const whiteMat = new THREE.MeshStandardMaterial({ color: 0xf4f0e6, flatShading: true });
@@ -526,27 +589,39 @@ export class RivalLines {
   /** show a rig over every rival currently fishing; exclude = local player */
   update(dt, elapsed, water, racers, exclude) {
     let i = 0;
+    const dropping = new Set();
     for (const s of racers ?? []) {
       if (s === exclude || s.state !== "fishing") continue;
+      const rx = s.mesh.position.x, rz = s.mesh.position.z;
+      const bedY = -lakeDepthAt(rx, rz) + 0.4;
+      if (s.mesh.position.y > bedY + 0.01) continue;
       if (i >= this.rigs.length) break;
       const rig = this.rigs[i++];
       rig.g.visible = true;
-      const rx = s.mesh.position.x, rz = s.mesh.position.z;
       const sway = Math.sin(elapsed * 1.3 + rig.phase) * 0.2;
       const topY = water.heightAt(rx, rz, elapsed) + Math.sin(elapsed * 2.2 + rig.phase) * 0.05;
       rig.bobber.position.set(rx + sway, topY + 0.08, rz);
       rig.bobber.rotation.z = sway * 0.5;
       const rockTop = s.mesh.position.y + 0.35;
-      const len = Math.max(0.3, rig.bobber.position.y - 0.07 - rockTop);
+      const lineTop = rig.bobber.position.y - 0.07;
+      const previousY = this.dropYs.get(s) ?? lineTop - 1.1;
+      const lineBottom = Math.max(rockTop, previousY - HOOK_SPEED * dt);
+      this.dropYs.set(s, lineBottom);
+      dropping.add(s);
+      const len = Math.max(0.3, lineTop - lineBottom);
       rig.line.scale.y = len;
-      rig.line.position.set(rx + sway * 0.5, rockTop + len / 2, rz);
+      rig.line.position.set(rx + sway * 0.5, lineBottom + len / 2, rz);
       rig.line.rotation.z = sway * 0.12;
     }
     for (; i < this.rigs.length; i++) this.rigs[i].g.visible = false;
+    for (const s of this.dropYs.keys()) {
+      if (!dropping.has(s)) this.dropYs.delete(s);
+    }
   }
 
   hideAll() {
     for (const rig of this.rigs) rig.g.visible = false;
+    this.dropYs.clear();
   }
 }
 
@@ -589,5 +664,19 @@ export class World {
 
   scareDucks(pos) {
     for (const d of this.ducks) d.scareFrom(pos);
+  }
+
+  hitDuck(pos, vel) {
+    for (const d of this.ducks) {
+      if (d.flying || !d.group.visible) continue;
+      const p = d.group.position;
+      const dx = p.x - pos.x;
+      const dz = p.z - pos.z;
+      if (dx * dx + dz * dz < 0.8 * 0.8 && Math.abs((p.y + 0.3) - pos.y) < 0.85) {
+        const at = p.clone().add(new THREE.Vector3(0, 0.35, 0));
+        if (d.flyAway(pos, vel)) return at;
+      }
+    }
+    return null;
   }
 }
