@@ -110,7 +110,7 @@ export function renderScoreboard(rows) {
       `<span class="dot" style="background:${r.color}"></span>` +
       `<span class="name">${r.me ? "YOU · " : ""}${r.name}</span>` +
       `<span class="holes">${"★".repeat(r.holes)}</span>` +
-      `<span class="dist">${r.finished ? "🚩" : r.busy ? "🎣" : Math.round(r.dist) + "m"}</span>`;
+      `<span class="dist">${r.finished ? "IN!" : r.busy ? "glub" : Math.round(r.dist) + "m"}</span>`;
     els.scoreboard.appendChild(div);
   }
 }
@@ -168,9 +168,9 @@ export function buildPaintUI(colors, patterns, onColor, onPattern) {
 // ---------------------------------------------------------------- results
 export function showResults(rows, playerWon) {
   els.results.classList.remove("hidden");
-  els.resultsTitle.textContent = playerWon ? "🏆 YOU WIN!" : "RESULTS";
+  els.resultsTitle.textContent = playerWon ? "YOU WIN!" : "RESULTS";
   els.resultsList.innerHTML = "";
-  const medals = ["🥇", "🥈", "🥉"];
+  const medals = ["1st", "2nd", "3rd"];
   rows.forEach((r, i) => {
     const div = document.createElement("div");
     div.className = "result-row" + (i === 0 ? " first" : "");

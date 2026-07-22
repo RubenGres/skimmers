@@ -1,4 +1,4 @@
-# 🪨 SKIMMERS — the rock-skipping race
+# SKIMMERS — the rock-skipping race
 
 **First stone to the flag wins.** Find a rock, grind it flat, paint it, then
 skip it across a lake full of rivals, rowboats, islands and ducks.
@@ -8,7 +8,7 @@ skip it across a lake full of rivals, rowboats, islands and ducks.
 
 ![racing across the lake](media/race.png)
 
-## 🌐 Multiplayer
+## Multiplayer
 
 Serverless WebRTC (PeerJS): **Host a lobby**, share the 4-letter room code,
 friends hit **Join**. Everyone preps their own rock while the lobby fills;
@@ -17,7 +17,7 @@ physics on their own machine — throws feel instant — while positions and
 events stream peer-to-peer. The host referees: match clock, hole
 transitions, winner calls, and the bot fleet.
 
-## 🎮 How to play
+## How to play
 
 ```
 find a rock → shape it → paint it → skip battle
@@ -26,7 +26,7 @@ find a rock → shape it → paint it → skip battle
 | Verb | How |
 |---|---|
 | **Skip** | drag back & release — drag length is power, sideways drag steers. Flat + fast throws chain hops. |
-| **Splash** | toggle 💥 (or press `X`) and lob your stone at a rival — knock theirs under and they have to fish it back |
+| **Splash** | tap the hint pill (or press `X`) and lob your stone at a rival — knock theirs under and they have to fish it back |
 | **Fish** | sank it? the camera dives underwater — steer the descending hook past the fish to your rock. Every fish you bump shoves the hook back up and costs you distance |
 | **Island stop** | land on an island and you throw from dry sand — no drowning, no fishing |
 | **Ferry** | land *in* a rowboat and it carries your stone across the lake |
@@ -39,13 +39,13 @@ holes wins.
 
 ![spires guard the flag](media/course.png)
 
-## ✨ The juicy bits
+## The juicy bits
 
 ![instant replay killcam](media/killcam.png)
 
-- 📼 **Instant-replay killcam** — every winning throw is recorded on a flight
+- **Instant-replay killcam** — every winning throw is recorded on a flight
   tape and replayed letterboxed from a cinematic side angle
-- 🔥 chain 5+ hops and your rock catches **fire**
+- chain 5+ hops and your rock catches **fire**
 - Squash & stretch on every skip, googly eyes that jiggle on springs
 - Hitstop, slow-mo final approach, FOV kicks, trauma-based screen shake
 - Fully procedural Web Audio — zero sound files; pitch-climbing skip plinks
@@ -57,7 +57,7 @@ Sink your stone and the camera follows it down:
 
 ![underwater fishing](media/fishing.png)
 
-## 🏃 Run it locally
+## Run it locally
 
 ```sh
 python3 -m http.server 8741        # or: npx serve .
@@ -66,7 +66,7 @@ python3 -m http.server 8741        # or: npx serve .
 
 No build step. Plain ES modules; three.js comes from a CDN importmap.
 
-## 🧠 Architecture notes
+## Architecture notes
 
 - [`src/physics.js`](src/physics.js) — the skip sim: water-entry angle +
   speed + rock flatness decide *skip / settle / sink*. `simulateThrow()` runs
@@ -87,5 +87,5 @@ No build step. Plain ES modules; three.js comes from a CDN importmap.
 
 ---
 
-Built with [Claude Code](https://claude.com/claude-code) 🤖 — one session,
+Built with [Claude Code](https://claude.com/claude-code) — one session,
 from empty folder to deployed game.

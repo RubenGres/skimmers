@@ -193,7 +193,7 @@ export class Fishing {
     this.el.classList.remove("hidden");
     els.throwUi.classList.add("hidden");
     this.hintEl.textContent = "steer the hook down to your rock — don't touch the fish!";
-    this.catchesEl.textContent = "🎣";
+    this.catchesEl.textContent = "";
     audio.sink; // (splash already played by the sink event)
   }
 
@@ -263,7 +263,7 @@ export class Fishing {
           f.speed = Math.abs(f.speed) * Math.sign(dx || 1); // dart away from the hook
           audio.fishMiss();
           this.rock.kickEyes(1);
-          this.catchesEl.textContent = "🎣" + " 🐟".repeat(Math.min(6, this.hits));
+          this.catchesEl.textContent = `fish bumps: ${this.hits}`;
           this.hintEl.textContent = ["ow! fish!", "shoo!", "they bite!", "not the fish!"][this.hits % 4];
           const wp = this.group.position;
           this.particles.glow.emit(wp.x + this.hookX, FLOOR_Y + this.hookY, wp.z, dx * 2, 1, 0,

@@ -450,7 +450,7 @@ ui.els.playBtn.addEventListener("click", () => {
 
 ui.els.muter.addEventListener("click", () => {
   audio.setMuted(!audio.muted);
-  ui.els.muter.textContent = audio.muted ? "🔇" : "🔊";
+  ui.els.muter.textContent = audio.muted ? "muted" : "snd";
 });
 
 // ------------------------------------------------------------------ multiplayer
@@ -513,7 +513,7 @@ function updateLobbyUI() {
     row.innerHTML =
       `<span class="dot" style="background:${tintFor(p.id)}"></span>` +
       `<span>${p.id === NET.myId ? "YOU" : p.name}</span>` +
-      `<span>${p.ready ? "✅" : "⛏"}</span>`;
+      `<span>${p.ready ? "ready" : "shaping…"}</span>`;
     lobbyEls.list.appendChild(row);
   }
   const allReady = [...NET.players.values()].every((p) => p.ready);
@@ -570,7 +570,7 @@ function attachNetHandlers() {
     removeParticipant(id);
   };
   net.onDown = () => {
-    ui.banner("HOST LEFT 😢", "rowing back to shore…", 2.4);
+    ui.banner("HOST LEFT", "rowing back to shore…", 2.4);
     setTimeout(() => location.reload(), 2600);
   };
 }
@@ -1063,8 +1063,8 @@ function setThrowMode(mode) {
   G.throwMode = mode;
   ui.els.throwHint.classList.toggle("splash", mode === "splash");
   ui.setThrowHint(mode === "skip"
-    ? "drag back & release · tap here or press X for 💥 splash"
-    : "💥 SPLASH — lob at a rival to sink them · tap to skip again");
+    ? "drag back & release · tap here or press X for SPLASH mode"
+    : "SPLASH MODE — lob at a rival to sink them · tap to skip again");
 }
 // the hint pill doubles as the mode toggle (touch-friendly, no chrome)
 ui.els.throwHint.addEventListener("pointerdown", (e) => {
@@ -1093,7 +1093,7 @@ function onSkimmerEvent(type, data) {
         if (data.n === 5) {
           hitstop(0.06, 0.85);
           fovKick(2);
-          if (!sc.behind) ui.popup(sc.x, sc.y - 64, "🔥 ON FIRE!", { size: 30, color: "#ff8a3d" });
+          if (!sc.behind) ui.popup(sc.x, sc.y - 64, "ON FIRE!", { size: 30, color: "#ff8a3d" });
         }
         if (data.n === 8) { hitstop(0.09, 0.9); ui.banner("SKIP GOD", "", 1.0); }
         haptic(8);
@@ -1203,7 +1203,7 @@ function onSkimmerEvent(type, data) {
       particles.grindChips(data.at);
       const sc = worldToScreen(data.at);
       if (mine) {
-        if (!sc.behind) ui.popup(sc.x, sc.y - 20, "🏝 ISLAND STOP!", { size: 28, color: "#6fe07a" });
+        if (!sc.behind) ui.popup(sc.x, sc.y - 20, "ISLAND STOP!", { size: 28, color: "#6fe07a" });
         ui.banner("SAFE ON SAND", "dry land — throw again whenever, no fishing here", 1.6);
         cam.mode = "aim";
         G.throwCooldown = 0.4;
@@ -1272,7 +1272,7 @@ function holeWon(s) {
     });
   }
   if (s.isPlayer) {
-    ui.banner("HOLE WON! 🏆", `${s.throws} throws — best chain ×${s.bestCombo}`, 2.4);
+    ui.banner("HOLE WON!", `${s.throws} throws — best chain ×${s.bestCombo}`, 2.4);
     slowmo(1.0, 0.35);
     shake(0.2);
     ui.flash(0.3);
