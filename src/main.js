@@ -133,6 +133,7 @@ const G = {
   throwCooldown: 0,
   slowmoUsed: false,
   aimDir: new THREE.Vector3(0, 0, -1), // camera-following aim direction
+  paintDrag: { mode: null, lastX: 0, lastY: 0, spinVel: 0 }, // paint-phase grab & spin
   effects: [], // { t, fn } delayed one-shots on game time
 };
 
@@ -401,6 +402,12 @@ function onPointerDown(e) {
     }
   } else if (G.state === "shape") {
     G.grinding = true;
+  } else if (G.state === "paint") {
+    // drag ON the stone paints; drag anywhere else grabs and spins it
+    const hits = raycastFrom(e, [G.playerRock.mesh]);
+    G.paintDrag.mode = hits.length ? "paint" : "rotate";
+    G.paintDrag.lastX = e.clientX;
+    G.paintDrag.lastY = e.clientY;
   }
 }
 
@@ -421,6 +428,7 @@ function onPointerUp() {
   }
   drag.active = false;
   if (G.state === "shape") G.grinding = false;
+  G.paintDrag.mode = null;
 }
 
 // ------------------------------------------------------------------ phase: TITLE
@@ -936,7 +944,8 @@ function updateShape(dt) {
 function enterPaint() {
   G.state = "paint";
   G.brushColor = ROCK_COLORS[1];
-  ui.showPhase("PAINT IT", "pick a color & drag on the stone to paint — DUNK dips the whole rock");
+  G.paintDrag.spinVel = 0.5;
+  ui.showPhase("PAINT IT", "drag the stone to paint it · drag the water to spin it around");
   ui.els.phaseNext.textContent = "To the lake! →";
   ui.els.rockStats.classList.add("hidden");
   ui.buildPaintUI(
@@ -959,15 +968,28 @@ function enterPaint() {
 
 function updatePaint(dt) {
   const rock = G.playerRock;
-  // pottery-wheel painting: the stone keeps slowly turning under your brush
-  rock.group.rotation.y += dt * (pointer.down ? 0.25 : 0.8);
-  if (pointer.down) {
+  const pd = G.paintDrag;
+
+  if (pointer.down && pd.mode === "paint") {
     const hits = raycastFrom({ clientX: pointer.x, clientY: pointer.y }, [rock.mesh]);
     if (hits.length && hits[0].uv) {
       rock.paintDab(hits[0].uv, G.brushColor);
       if (Math.random() < 0.2) audio.paintDab();
       if (Math.random() < 0.12) particles.paintPuff(hits[0].point, G.brushColor);
     }
+  } else if (pointer.down && pd.mode === "rotate") {
+    // grab & spin: yaw with horizontal drag, tilt with vertical (clamped)
+    const dx = pointer.x - pd.lastX;
+    const dy = pointer.y - pd.lastY;
+    rock.group.rotation.y += dx * 0.009;
+    rock.group.rotation.x = clamp(rock.group.rotation.x + dy * 0.006, -0.85, 0.85);
+    pd.spinVel = clamp(dx * 0.009 / Math.max(dt, 1 / 240), -7, 7);
+    pd.lastX = pointer.x;
+    pd.lastY = pointer.y;
+  } else {
+    // released: spin inertia bleeds off into a lazy pottery-wheel turn
+    pd.spinVel = damp(pd.spinVel, 0.5, 2.2, dt);
+    rock.group.rotation.y += pd.spinVel * dt;
   }
 }
 

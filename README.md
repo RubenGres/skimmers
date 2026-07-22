@@ -49,7 +49,7 @@ holes wins.
 - Squash & stretch on every skip, googly eyes that jiggle on springs
 - Hitstop, slow-mo final approach, FOV kicks, trauma-based screen shake
 - Fully procedural Web Audio — zero sound files; pitch-climbing skip plinks
-- Brush-paint your stone by hand, pottery-wheel style
+- Brush-paint your stone by hand — drag the water to spin & tilt it under your brush
 
 ![painting your rock](media/paint.png)
 
