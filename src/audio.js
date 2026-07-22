@@ -176,6 +176,14 @@ export class Audio {
     this._noise(0.25, { type: "highpass", freq: 1800, gain: 0.14, attack: 0.003 });
   }
 
+  /** springy hull rebound */
+  boing(n = 1) {
+    const base = 180 + Math.min(n, 8) * 22;
+    this._tone(base, 0.22, { type: "sine", gain: 0.22, slideTo: base * 2.6 });
+    this._tone(base * 1.5, 0.14, { type: "triangle", gain: 0.1, slideTo: base * 3.2, delay: 0.02 });
+    this._noise(0.1, { type: "lowpass", freq: 900, gain: 0.12, attack: 0.004 });
+  }
+
   /** boat thunk */
   thunk() {
     this._noise(0.12, { type: "lowpass", freq: 400, gain: 0.25, attack: 0.003 });

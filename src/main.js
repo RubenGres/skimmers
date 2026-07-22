@@ -1159,6 +1159,22 @@ function onSkimmerEvent(type, data) {
       if (mine) ui.banner("DIRECT HIT!", `${victim.name} is going for a swim`, 1.4);
       break;
     }
+    case "boing": {
+      audio.boing(data.n);
+      particles.skipSplash(data.at, s.vel, 0.5);
+      world.scareDucks(data.at);
+      const sc = worldToScreen(data.at);
+      if (mine) {
+        shake(0.16);
+        hitstop(0.04, 0.7);
+        fovKick(2);
+        if (!sc.behind) ui.popup(sc.x, sc.y - 20, `BOING ×${data.n}!`, { size: 30, color: "#ffd24a" });
+        haptic(15);
+      } else if (!sc.behind) {
+        ui.popup(sc.x, sc.y, "boing", { size: 16, color: "#ffd24a" });
+      }
+      break;
+    }
     case "boatThunk": {
       audio.thunk();
       particles.skipSplash(data.at, s.vel, 0.4);
@@ -1638,4 +1654,4 @@ enterTitle();
 requestAnimationFrame(frame);
 
 // tiny hook for automated smoke tests (harmless in normal play)
-window.__skimmers = { G, selectCandidate, worldToScreen, cam, camRig, camera, THREE, HOLES };
+window.__skimmers = { G, selectCandidate, worldToScreen, cam, camRig, camera, THREE, HOLES, boats };

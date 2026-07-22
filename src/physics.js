@@ -153,12 +153,20 @@ export class Skimmer {
         if (ctx.boats) {
           const hit = ctx.boats.collide(this.pos, this.vel, 0.45);
           if (hit?.type === "hull") {
-            // thunk off the side
+            // BOING — elastic rebound off the hull; bank shots keep the chain
             const n = hit.normal;
             const d = this.vel.dot(n);
-            if (d < 0) this.vel.addScaledVector(n, -1.7 * d);
-            this.vel.multiplyScalar(0.55);
-            this._emit("boatThunk", { at: this.pos.clone() });
+            if (d < 0) this.vel.addScaledVector(n, -1.92 * d);
+            this.vel.x *= 0.94;
+            this.vel.z *= 0.94;
+            this.vel.y = Math.max(this.vel.y * 0.5, 2.4); // pop up and keep flying
+            this.pos.addScaledVector(n, 0.7); // clear the hull so we don't re-collide
+            this.skips++;
+            this.bestCombo = Math.max(this.bestCombo, this.skips);
+            this.rock.kickEyes(1.8);
+            this.rock.squashKick?.(1.2);
+            this.tapeSkips.push(this.tape.length - 1);
+            this._emit("boing", { at: this.pos.clone(), n: this.skips });
           } else if (hit?.type === "deck" && this.vel.y < 0) {
             // landed on the deck — ride the ferry!
             this.state = "onboat";

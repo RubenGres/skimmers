@@ -376,4 +376,15 @@ export class Particles {
   oarDip(x, z) {
     this.rings.spawn(x, z, 0.7, 0.8);
   }
+
+  /** steamboat stack puff — soft gray, rises and drifts */
+  smoke(pos) {
+    const g = 0.62 + Math.random() * 0.18;
+    this.spray.emit(
+      pos.x, pos.y, pos.z,
+      (Math.random() - 0.5) * 0.5, 1.4 + Math.random() * 0.8, (Math.random() - 0.5) * 0.5,
+      1.4 + Math.random() * 0.9, 5 + Math.random() * 4,
+      g, g, g * 1.04, -0.6, 1.4
+    );
+  }
 }

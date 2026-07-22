@@ -1,7 +1,7 @@
 # SKIMMERS — the rock-skipping race
 
 **First stone to the flag wins.** Find a rock, grind it flat, paint it, then
-skip it across a lake full of rivals, rowboats, islands and ducks.
+skip it across a lake full of rivals, boats, islands and ducks.
 2–8 players · online multiplayer · browser · 3D · ~3 minute matches.
 
 **Play now → [skimmers-lake.vercel.app](https://skimmers-lake.vercel.app)**
@@ -29,7 +29,8 @@ find a rock → shape it → paint it → skip battle
 | **Splash** | tap the SKIP/SPLASH pill (or press `X`) and lob your stone at a rival — knock theirs under and they have to fish it back |
 | **Fish** | sank it? the camera dives underwater — steer the descending hook past the fish to your rock. Every fish you bump shoves the hook back up and costs you distance |
 | **Island stop** | land on an island and you throw from dry sand — no drowning, no fishing |
-| **Ferry** | land *in* a rowboat and it carries your stone across the lake |
+| **Ferry** | land *in* a boat and it carries your stone across the lake |
+| **Rebound** | hit a hull side and the stone BOINGs off elastically — bank shots count toward your chain |
 
 Each hole is a fairway of buoys with doglegs and island rest stops — follow
 the minimap. Giant rock spires wall off the straight line to the flag:
