@@ -1660,8 +1660,10 @@ function updateRace(dt) {
   // rival fishing lines — watch who's paying the price
   rivalLines.update(dt, G.elapsed, water, G.racers, G.player);
 
-  // roll the full-scene killcam tape
-  if (!G.replay) recordTapeFrame();
+  // roll the full-scene killcam tape — and freeze it the moment the hole is
+  // decided, so the frozen post-win seconds don't flush the flight out of
+  // the ring buffer (that made replays end on a motionless rock)
+  if (!G.replay && !G.holeWinner) recordTapeFrame();
 
   minimapTick(dt);
 
