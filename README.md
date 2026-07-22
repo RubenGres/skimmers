@@ -2,9 +2,20 @@
 
 **First stone to the flag wins.** Find a rock, grind it flat, paint it, then
 skip it across a lake full of rivals, rowboats, islands and ducks.
-2–8 racers · browser · 3D · ~3 minute matches.
+2–8 players · online multiplayer · browser · 3D · ~3 minute matches.
+
+**Play now → [skimmers-lake.vercel.app](https://skimmers-lake.vercel.app)**
 
 ![racing across the lake](media/race.png)
+
+## 🌐 Multiplayer
+
+Serverless WebRTC (PeerJS): **Host a lobby**, share the 4-letter room code,
+friends hit **Join**. Everyone preps their own rock while the lobby fills;
+empty seats become bots (up to 8 racers). Each player's stone runs full
+physics on their own machine — throws feel instant — while positions and
+events stream peer-to-peer. The host referees: match clock, hole
+transitions, winner calls, and the bot fleet.
 
 ## 🎮 How to play
 
@@ -16,7 +27,7 @@ find a rock → shape it → paint it → skip battle
 |---|---|
 | **Skip** | drag back & release — drag length is power, sideways drag steers. Flat + fast throws chain hops. |
 | **Splash** | toggle 💥 (or press `X`) and lob your stone at a rival — knock theirs under and they have to fish it back |
-| **Fish** | sank it? click when the sweep-line crosses the gold zone to reel your rock back |
+| **Fish** | sank it? the camera dives underwater — steer the descending hook past the fish to your rock. Every fish you bump shoves the hook back up and costs you distance |
 | **Island stop** | land on an island and you throw from dry sand — no drowning, no fishing |
 | **Ferry** | land *in* a rowboat and it carries your stone across the lake |
 

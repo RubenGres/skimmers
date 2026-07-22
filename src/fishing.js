@@ -1,103 +1,331 @@
 /**
- * The fishing minigame: your rock sank — reel it back before you can throw
- * again. A cursor sweeps the bar; click while it's inside the gold zone.
- * One clean hit = caught. Each miss shrinks the zone; third miss the lake
- * takes pity and coughs the rock up anyway (you lose the most time).
+ * The fishing minigame, underwater edition. Your rock sank — the camera dives
+ * below the surface into a little aquarium diorama: light shafts, seaweed,
+ * bubbles, a school of very territorial fish, and your googly rock waiting on
+ * the lake bed. Steer the hook (pointer left/right) as it lowers; touch a
+ * fish and it shoves the hook back up. Reach the rock to reel it home.
  */
+import * as THREE from "three";
 import { audio } from "./audio.js";
 import { els } from "./ui.js";
 
+const FLOOR_Y = -14; // world y of the lake bed diorama
+const HOOK_START = 10.5; // local y above the floor where the hook starts
+const ROCK_Y = 0.55; // local y of the rock on the bed
+const HOOK_SPEED = 2.0;
+const STEER_RANGE = 8.5;
+
+const FISH_COLORS = [0xffa63d, 0x37c8e0, 0xff5470, 0x9d7cf4, 0xffd24a, 0x6fe07a];
+
+function makeFish(color) {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color, flatShading: true });
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.42, 8, 6), mat);
+  body.scale.set(1.5, 0.85, 0.6);
+  g.add(body);
+  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.55, 4), mat);
+  tail.rotation.z = Math.PI / 2;
+  tail.position.x = -0.72;
+  tail.scale.z = 0.4;
+  g.add(tail);
+  const eyeMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
+  const eye = new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 5), eyeMat);
+  eye.position.set(0.42, 0.12, 0.22);
+  g.add(eye);
+  const eye2 = eye.clone();
+  eye2.position.z = -0.22;
+  g.add(eye2);
+  return g;
+}
+
 export class Fishing {
-  constructor() {
-    this.el = document.getElementById("fishing-ui");
-    this.zoneEl = document.getElementById("fishing-zone");
-    this.cursorEl = document.getElementById("fishing-cursor");
-    this.hintEl = document.getElementById("fishing-hint");
-    this.catchesEl = document.getElementById("fishing-catches");
+  constructor(scene, particles) {
+    this.scene = scene;
+    this.particles = particles;
     this.active = false;
     this.onDone = null;
-    this._click = () => this._attempt();
-    this._tickT = 0;
+    this.rock = null;
+
+    // UI
+    this.el = document.getElementById("fishing-ui");
+    this.hintEl = document.getElementById("fishing-hint");
+    this.catchesEl = document.getElementById("fishing-catches");
+
+    // ---------- diorama (built once, hidden) ----------
+    const g = new THREE.Group();
+    this.group = g;
+    g.visible = false;
+    scene.add(g);
+
+    // deep-water backdrop dome
+    const backMat = new THREE.ShaderMaterial({
+      side: THREE.BackSide,
+      depthWrite: false,
+      uniforms: { uTime: { value: 0 } },
+      vertexShader: /* glsl */ `
+        varying vec3 vPos;
+        void main() { vPos = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+      `,
+      fragmentShader: /* glsl */ `
+        varying vec3 vPos;
+        uniform float uTime;
+        void main() {
+          float h = clamp(vPos.y / 30.0 + 0.5, 0.0, 1.0);
+          vec3 deep = vec3(0.03, 0.15, 0.27);
+          vec3 shallow = vec3(0.16, 0.52, 0.68);
+          vec3 col = mix(deep, shallow, h * h);
+          // faint drifting caustic shimmer
+          float c = sin(vPos.x * 0.55 + uTime * 0.7) * sin(vPos.z * 0.5 - uTime * 0.5) * sin(vPos.y * 0.4 + uTime * 0.3);
+          col += max(0.0, c) * 0.045 * h;
+          gl_FragColor = vec4(col, 1.0);
+        }
+      `,
+    });
+    this.backMat = backMat;
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(42, 24, 16), backMat);
+    dome.position.y = 8;
+    g.add(dome);
+
+    // sandy bed
+    const floor = new THREE.Mesh(
+      new THREE.CircleGeometry(30, 36),
+      new THREE.MeshStandardMaterial({ color: 0xc8b98a, flatShading: true })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    g.add(floor);
+    // scattered pebbles
+    const pebbleMat = new THREE.MeshStandardMaterial({ color: 0x8f9aa3, flatShading: true });
+    for (let i = 0; i < 10; i++) {
+      const p = new THREE.Mesh(new THREE.SphereGeometry(0.2 + Math.random() * 0.3, 6, 5), pebbleMat);
+      const a = Math.random() * Math.PI * 2;
+      const r = 3 + Math.random() * 12;
+      p.position.set(Math.cos(a) * r, 0.12, Math.sin(a) * r);
+      p.scale.y = 0.6;
+      g.add(p);
+    }
+
+    // seaweed (swayed in update)
+    this.weeds = [];
+    const weedMat = new THREE.MeshStandardMaterial({ color: 0x2e7d4f, flatShading: true });
+    for (let i = 0; i < 7; i++) {
+      const w = new THREE.Mesh(new THREE.ConeGeometry(0.22, 2.6 + Math.random() * 2, 5), weedMat);
+      const a = Math.random() * Math.PI * 2;
+      const r = 4.5 + Math.random() * 9;
+      w.position.set(Math.cos(a) * r, 1.3, Math.sin(a) * r);
+      w.userData.phase = Math.random() * 10;
+      g.add(w);
+      this.weeds.push(w);
+    }
+
+    // light shafts from the surface
+    const shaftMat = new THREE.MeshBasicMaterial({
+      color: 0xbfeaff, transparent: true, opacity: 0.055, depthWrite: false,
+      blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    });
+    for (let i = 0; i < 4; i++) {
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.7 + i * 0.3, 2.4 + i * 0.5, 26, 8, 1, true), shaftMat);
+      shaft.position.set(-6 + i * 4.2, 13, -3 - (i % 2) * 3);
+      shaft.rotation.z = 0.16;
+      g.add(shaft);
+    }
+
+    // the line + hook
+    this.lineMesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.025, 0.025, 1, 5),
+      new THREE.MeshBasicMaterial({ color: 0xeeeeee })
+    );
+    g.add(this.lineMesh);
+    this.hook = new THREE.Group();
+    const hookMat = new THREE.MeshStandardMaterial({ color: 0xd8dde0, flatShading: true, metalness: 0.4 });
+    const curve = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.07, 6, 12, Math.PI * 1.4), hookMat);
+    curve.rotation.z = Math.PI * 0.8;
+    this.hook.add(curve);
+    const barb = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.28, 6), hookMat);
+    barb.position.set(0.33, 0.28, 0);
+    this.hook.add(barb);
+    const sinker = new THREE.Mesh(new THREE.SphereGeometry(0.12, 6, 5), new THREE.MeshStandardMaterial({ color: 0x66707a }));
+    sinker.position.y = 0.42;
+    this.hook.add(sinker);
+    g.add(this.hook);
+
+    // fish school
+    this.fish = [];
+    for (let i = 0; i < 6; i++) {
+      const f = makeFish(FISH_COLORS[i % FISH_COLORS.length]);
+      g.add(f);
+      this.fish.push({
+        mesh: f,
+        y: 2.6 + i * 1.35 + Math.random() * 0.5, // stacked lanes between rock and surface
+        xr: 5.5 + Math.random() * 2.5,
+        speed: (1.6 + Math.random() * 1.6) * (Math.random() < 0.5 ? 1 : -1),
+        phase: Math.random() * 10,
+        scare: 0,
+      });
+    }
+
+    this._bubbleT = 0;
+    this._tickY = 0;
   }
 
-  start(onDone) {
+  /** dive in: place the diorama under the sink spot and hand over the rock */
+  start(spot, rock, onDone) {
     this.active = true;
     this.onDone = onDone;
-    this.t = 0;
-    this.speed = 1.35 + Math.random() * 0.4;
-    this.zoneW = 0.24;
-    this.zoneX = 0.15 + Math.random() * 0.55;
-    this.tries = 0;
-    this.el.classList.remove("hidden");
-    this.el.style.pointerEvents = "auto";
-    els.throwUi.classList.add("hidden");
-    this.hintEl.textContent = "CLICK when the line crosses the gold zone!";
-    this.catchesEl.textContent = "🎣";
-    this._layoutZone();
-    window.addEventListener("pointerdown", this._click);
-  }
+    this.rock = rock;
+    this.hits = 0;
+    this.phase = "drop"; // drop -> reel
+    this.group.position.set(spot.x, FLOOR_Y, spot.z);
+    this.group.visible = true;
 
-  _layoutZone() {
-    this.zoneEl.style.left = `${this.zoneX * 100}%`;
-    this.zoneEl.style.width = `${this.zoneW * 100}%`;
-  }
+    // rock waits on the bed, eyes up
+    this._rockSaved = { parent: rock.group.parent, pos: rock.group.position.clone(), rot: rock.group.rotation.clone() };
+    rock.group.position.set(spot.x, FLOOR_Y + ROCK_Y, spot.z);
+    rock.group.rotation.set(0, Math.random() * Math.PI * 2, 0);
+    rock.kickEyes(1.5);
 
-  _cursorPos() {
-    // ping-pong 0..1
-    const k = (Math.sin(this.t * this.speed * Math.PI * 2 - Math.PI / 2) + 1) / 2;
-    return k;
-  }
-
-  _attempt() {
-    if (!this.active) return;
-    const c = this._cursorPos();
-    if (c >= this.zoneX && c <= this.zoneX + this.zoneW) {
-      audio.catchRock();
-      this._finish(true);
-    } else {
-      this.tries++;
-      audio.fishMiss();
-      this.zoneW = Math.max(0.1, this.zoneW - 0.06);
-      this.zoneX = 0.12 + Math.random() * 0.6;
-      this.speed += 0.15;
-      this._layoutZone();
-      this.catchesEl.textContent = "🎣" + " ❌".repeat(this.tries);
-      this.hintEl.textContent = this.tries >= 2 ? "last chance..." : "missed! again!";
-      if (this.tries >= 3) {
-        audio.catchRock();
-        this._finish(false);
-      }
+    this.hookX = 0;
+    this.hookY = HOOK_START;
+    for (const f of this.fish) {
+      f.mesh.position.set((Math.random() - 0.5) * f.xr * 2, f.y, (Math.random() - 0.5) * 1.2);
+      f.scare = 0;
     }
+
+    this.el.classList.remove("hidden");
+    els.throwUi.classList.add("hidden");
+    this.hintEl.textContent = "steer the hook down to your rock — don't touch the fish!";
+    this.catchesEl.textContent = "🎣";
+    audio.sink; // (splash already played by the sink event)
+  }
+
+  /** camera pose for main's "fishing" mode — aquarium side view */
+  getCamPose() {
+    const p = this.group.position;
+    return {
+      pos: new THREE.Vector3(p.x, FLOOR_Y + 6.2, p.z + 13.5),
+      look: new THREE.Vector3(p.x, FLOOR_Y + 5.2, p.z),
+    };
+  }
+
+  /** pointerX01: pointer x in [0,1] across the screen */
+  update(dt, elapsed, pointerX01 = 0.5) {
+    if (!this.active) return;
+    this.backMat.uniforms.uTime.value = elapsed;
+
+    // scenery life
+    for (const w of this.weeds) {
+      w.rotation.x = Math.sin(elapsed * 1.1 + w.userData.phase) * 0.14;
+      w.rotation.z = Math.cos(elapsed * 0.9 + w.userData.phase) * 0.14;
+    }
+    this._bubbleT -= dt;
+    if (this._bubbleT <= 0) {
+      this._bubbleT = 0.3 + Math.random() * 0.5;
+      const p = this.group.position;
+      this.particles.glow.emit(
+        p.x + (Math.random() - 0.5) * 14, FLOOR_Y + 0.5 + Math.random() * 3, p.z + (Math.random() - 0.5) * 4,
+        0, 1.2 + Math.random(), 0, 1.5 + Math.random(), 2 + Math.random() * 2,
+        0.65, 0.85, 1.0, -1.2, 0.4
+      );
+    }
+
+    // fish patrol their lanes
+    for (const f of this.fish) {
+      const boost = 1 + f.scare * 2.5;
+      f.scare = Math.max(0, f.scare - dt);
+      f.mesh.position.x += f.speed * boost * dt;
+      if (Math.abs(f.mesh.position.x) > f.xr) {
+        f.mesh.position.x = Math.sign(f.mesh.position.x) * f.xr;
+        f.speed *= -1;
+      }
+      f.mesh.position.y = f.y + Math.sin(elapsed * 2 + f.phase) * 0.22;
+      f.mesh.scale.x = f.speed > 0 ? 1 : -1;
+      f.mesh.rotation.z = Math.sin(elapsed * 6 + f.phase) * 0.08;
+    }
+
+    if (this.phase === "drop") {
+      // steer + descend
+      const targetX = (pointerX01 - 0.5) * 2 * STEER_RANGE * 0.55;
+      this.hookX += (targetX - this.hookX) * Math.min(1, 9 * dt);
+      this.hookY -= HOOK_SPEED * dt;
+      if (this.hookY < this._tickY) {
+        this._tickY = this.hookY - 0.5;
+        audio.reelTick();
+      }
+
+      // fish collisions shove the hook back up
+      for (const f of this.fish) {
+        const dx = f.mesh.position.x - this.hookX;
+        const dy = f.mesh.position.y - this.hookY;
+        if (Math.abs(dx) < 0.85 && Math.abs(dy) < 0.5) {
+          this.hits++;
+          this.hookY = Math.min(HOOK_START, this.hookY + 2.7);
+          this._tickY = this.hookY;
+          f.scare = 1.4;
+          f.speed = Math.abs(f.speed) * Math.sign(dx || 1); // dart away from the hook
+          audio.fishMiss();
+          this.rock.kickEyes(1);
+          this.catchesEl.textContent = "🎣" + " 🐟".repeat(Math.min(6, this.hits));
+          this.hintEl.textContent = ["ow! fish!", "shoo!", "they bite!", "not the fish!"][this.hits % 4];
+          const wp = this.group.position;
+          this.particles.glow.emit(wp.x + this.hookX, FLOOR_Y + this.hookY, wp.z, dx * 2, 1, 0,
+            0.4, 5, 1.0, 0.6, 0.3, 2, 1);
+        }
+      }
+
+      // reached the rock?
+      if (this.hookY <= ROCK_Y + 0.55) {
+        if (Math.abs(this.hookX) < 1.15) {
+          this.phase = "reel";
+          audio.catchRock();
+          this.hintEl.textContent = "GOT IT! reeling...";
+          this.rock.kickEyes(2);
+          this.rock.squashKick?.(1);
+        } else {
+          this.hookY = ROCK_Y + 0.55; // hover the bed until you line it up
+        }
+      }
+    } else if (this.phase === "reel") {
+      this.hookY += 7.5 * dt;
+      this.hookX *= 1 - Math.min(1, 6 * dt);
+      this.rock.group.position.set(
+        this.group.position.x + this.hookX,
+        FLOOR_Y + this.hookY - 0.5,
+        this.group.position.z
+      );
+      this.rock.group.rotation.z = Math.sin(this.hookY * 2) * 0.15;
+      if (Math.random() < 0.4) {
+        this.particles.glow.emit(
+          this.rock.group.position.x, this.rock.group.position.y, this.rock.group.position.z,
+          (Math.random() - 0.5), 1.5, (Math.random() - 0.5), 0.6, 2.5, 0.7, 0.9, 1.0, -1, 0.6
+        );
+      }
+      if (this.hookY >= HOOK_START + 3) this._finish(this.hits === 0);
+    }
+
+    // hook + line transforms (local -> world via group)
+    this.hook.position.set(this.hookX, this.hookY, 0);
+    this.hook.rotation.z = (this.hookX / STEER_RANGE) * 0.4;
+    const lineTop = HOOK_START + 14;
+    const lineLen = lineTop - this.hookY - 0.45;
+    this.lineMesh.scale.y = lineLen;
+    this.lineMesh.position.set(this.hookX * 0.92, this.hookY + 0.45 + lineLen / 2, 0);
+    this.lineMesh.rotation.z = -(this.hookX / STEER_RANGE) * 0.06;
+  }
+
+  _finish(clean) {
+    this.active = false;
+    this.group.visible = false;
+    this.el.classList.add("hidden");
+    els.throwUi.classList.remove("hidden");
+    // hand the rock back to the game (main repositions it via placeAt)
+    this.onDone?.(clean, this.hits);
   }
 
   /** abort without result (hole was decided while we fished) */
   cancel() {
     if (!this.active) return;
     this.active = false;
-    window.removeEventListener("pointerdown", this._click);
+    this.group.visible = false;
     this.el.classList.add("hidden");
-    this.el.style.pointerEvents = "none";
     els.throwUi.classList.remove("hidden");
-  }
-
-  _finish(clean) {
-    this.active = false;
-    window.removeEventListener("pointerdown", this._click);
-    this.el.classList.add("hidden");
-    this.el.style.pointerEvents = "none";
-    els.throwUi.classList.remove("hidden");
-    this.onDone?.(clean, this.tries);
-  }
-
-  update(dt) {
-    if (!this.active) return;
-    this.t += dt;
-    const c = this._cursorPos();
-    this.cursorEl.style.left = `calc(${c * 100}% - 3px)`;
-    this._tickT += dt;
-    if (this._tickT > 0.09) {
-      this._tickT = 0;
-      audio.reelTick();
-    }
   }
 }

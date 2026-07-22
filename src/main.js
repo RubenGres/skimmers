@@ -24,6 +24,7 @@ import { Skimmer, simulateThrow, BLAST_R } from "./physics.js";
 import { BotBrain, BOT_PERSONAS } from "./bots.js";
 import { Fishing } from "./fishing.js";
 import { Minimap } from "./minimap.js";
+import { Net, makeRoomCode } from "./net.js";
 import * as ui from "./ui.js";
 
 // ------------------------------------------------------------------ renderer
@@ -55,7 +56,7 @@ const water = new Water(scene);
 const world = new World(scene);
 const boats = new Boats(scene);
 const particles = new Particles(scene);
-const fishing = new Fishing();
+const fishing = new Fishing(scene, particles);
 const minimap = new Minimap();
 const cel = new CelShader(scene, { steps: 4, floor: 0.42, rescanSec: 1.0 });
 
@@ -255,6 +256,10 @@ function camUpdate(dt) {
     v.normalize();
     targetPos = p.pos.clone().addScaledVector(v, -8.5).add(new THREE.Vector3(0, 4.2, 0));
     targetLook = p.pos.clone().addScaledVector(v, 4);
+  } else if (cam.mode === "fishing" && fishing.active) {
+    const pose = fishing.getCamPose();
+    targetPos = pose.pos;
+    targetLook = pose.look;
   } else if (cam.mode === "replay" && G.replay) {
     targetPos = G.replay.pos.clone().addScaledVector(G.replay.side, 9).add(new THREE.Vector3(0, 2.4, 0));
     targetLook = G.replay.pos;
@@ -410,6 +415,299 @@ ui.els.muter.addEventListener("click", () => {
   ui.els.muter.textContent = audio.muted ? "🔇" : "🔊";
 });
 
+// ------------------------------------------------------------------ multiplayer
+// Star topology over PeerJS (team scrap: p2p-netcode). Each client simulates
+// its OWN rock with full local physics (zero input latency); positions stream
+// as 10 Hz snapshots, juice fires from relayed events. The host owns match
+// flow (start, clock, hole transitions, winner calls) and pilots the bots.
+const net = new Net();
+const NET = {
+  mode: "solo", // solo | host | guest
+  myId: 0,
+  started: false,
+  players: new Map(), // id -> { id, name, ready, cfg }
+  byId: new Map(), // netId -> Skimmer (during a race)
+  snapAccum: 0,
+  clockAccum: 0,
+};
+const PLAYER_TINTS = ["#ffd24a", "#ff5470", "#37c8e0", "#6fe07a", "#9d7cf4", "#ff8a3d", "#f4f0e6", "#e0503a"];
+const tintFor = (id) => (id >= 100 ? null : PLAYER_TINTS[id % PLAYER_TINTS.length]);
+
+const lobbyEls = {
+  panel: document.getElementById("lobby-panel"),
+  code: document.getElementById("lobby-code"),
+  list: document.getElementById("lobby-list"),
+  start: document.getElementById("start-btn"),
+  hint: document.getElementById("lobby-hint"),
+  hostBtn: document.getElementById("host-btn"),
+  joinBtn: document.getElementById("join-btn"),
+  joinCode: document.getElementById("join-code"),
+  status: document.getElementById("net-status"),
+};
+
+function netStatus(text) {
+  lobbyEls.status.textContent = text;
+}
+
+function rockCfg(rock) {
+  const lumpLeft = rock.groups.reduce((s, g) => s + g.lump, 0) / rock.initialLumpSum;
+  return {
+    seed: rock.seed, size: rock.size, thickness: rock.thickness,
+    lumpAmp: rock.lumpAmp * lumpLeft, color: rock.color, pattern: rock.pattern,
+    strokes: rock.strokesDataURL(), name: rockName(rock.seed),
+  };
+}
+
+function rockFromCfg(c) {
+  const r = new Rock({
+    seed: c.seed, lumpAmp: c.lumpAmp, thickness: c.thickness,
+    size: c.size, color: c.color, pattern: c.pattern,
+  });
+  r.applyStrokesDataURL(c.strokes);
+  return r;
+}
+
+function updateLobbyUI() {
+  lobbyEls.list.innerHTML = "";
+  for (const p of NET.players.values()) {
+    const row = document.createElement("div");
+    row.className = "lp";
+    row.innerHTML =
+      `<span class="dot" style="background:${tintFor(p.id)}"></span>` +
+      `<span>${p.id === NET.myId ? "YOU" : p.name}</span>` +
+      `<span>${p.ready ? "✅" : "⛏"}</span>`;
+    lobbyEls.list.appendChild(row);
+  }
+  const allReady = [...NET.players.values()].every((p) => p.ready);
+  if (NET.mode === "host" && NET.players.get(0)?.ready && !NET.started) {
+    lobbyEls.start.classList.remove("hidden");
+    lobbyEls.start.textContent = allReady ? "Start race!" : `Start (${[...NET.players.values()].filter((p) => p.ready).length} ready)`;
+  }
+}
+
+lobbyEls.hostBtn.addEventListener("click", () => {
+  if (NET.mode !== "solo") return;
+  audio.pip(true);
+  netStatus("opening lobby…");
+  const code = makeRoomCode();
+  attachNetHandlers();
+  net.hostRoom(code, (err) => {
+    if (err) { netStatus("couldn't open a lobby — try again"); net.close(); return; }
+    NET.mode = "host";
+    NET.myId = 0;
+    NET.players.set(0, { id: 0, name: "Host", ready: false, cfg: null });
+    lobbyEls.code.textContent = `ROOM ${code}`;
+    lobbyEls.panel.classList.remove("hidden");
+    updateLobbyUI();
+    ui.els.title.classList.add("hidden");
+    ui.wipe(() => enterFind());
+  });
+});
+
+lobbyEls.joinBtn.addEventListener("click", () => {
+  if (NET.mode !== "solo") return;
+  const code = lobbyEls.joinCode.value.trim().toUpperCase();
+  if (code.length < 4) { netStatus("enter the 4-letter room code"); return; }
+  audio.pip(true);
+  netStatus("joining " + code + "…");
+  attachNetHandlers();
+  net.joinRoom(code, (err) => {
+    if (err) { netStatus("room not found — check the code"); net.close(); NET.mode = "solo"; return; }
+    NET.mode = "guest";
+    net.send({ t: "hello" });
+  });
+});
+
+lobbyEls.start.addEventListener("click", () => {
+  if (NET.mode !== "host" || NET.started) return;
+  audio.pip(true);
+  hostStartRace();
+});
+
+function attachNetHandlers() {
+  net.onMessage = handleNetMsg;
+  net.onPeerLeave = (id) => {
+    if (NET.mode !== "host") return;
+    net.broadcast({ t: "leave", id });
+    removeParticipant(id);
+  };
+  net.onDown = () => {
+    ui.banner("HOST LEFT 😢", "rowing back to shore…", 2.4);
+    setTimeout(() => location.reload(), 2600);
+  };
+}
+
+function removeParticipant(id) {
+  NET.players.delete(id);
+  const s = NET.byId.get(id);
+  if (s) {
+    scene.remove(s.mesh);
+    NET.byId.delete(id);
+    G.racers = G.racers.filter((r) => r !== s);
+  }
+  updateLobbyUI();
+}
+
+// ---------------- message routing ----------------
+function handleNetMsg(from, msg) {
+  if (NET.mode === "host") handleHostMsg(from, msg);
+  else handleGuestMsg(msg);
+}
+
+function handleHostMsg(from, msg) {
+  switch (msg.t) {
+    case "hello": {
+      if (NET.started) { net.sendTo(from, { t: "busy" }); return; }
+      const p = { id: from, name: `Skipper ${from + 1}`, ready: false, cfg: null };
+      NET.players.set(from, p);
+      net.sendTo(from, {
+        t: "welcome", id: from,
+        players: [...NET.players.values()].map((q) => ({ id: q.id, name: q.name, ready: q.ready })),
+      });
+      net.broadcast({ t: "join", id: from, name: p.name }, from);
+      updateLobbyUI();
+      break;
+    }
+    case "ready": {
+      const p = NET.players.get(from);
+      if (!p) return;
+      p.ready = true;
+      p.cfg = msg.rock;
+      p.name = msg.rock.name;
+      net.broadcast({ t: "ready", id: from, name: p.name }, from);
+      updateLobbyUI();
+      break;
+    }
+    case "s":
+      routeSnapshot(msg);
+      net.broadcast(msg, from);
+      break;
+    case "e":
+      routeEvent(msg);
+      if (msg.type === "flag") {
+        const s = NET.byId.get(msg.id);
+        if (s) declareHoleWon(s, { tape: msg.d?.tape, skips: msg.d?.skips });
+      }
+      net.broadcast(msg, from);
+      break;
+    case "knock": {
+      const victimId = msg.victim;
+      if (victimId === 0) G.player?.applyKnock(new THREE.Vector3(msg.from[0], 0, msg.from[1]));
+      else if (victimId >= 100) NET.byId.get(victimId)?.applyKnock(new THREE.Vector3(msg.from[0], 0, msg.from[1]));
+      else net.sendTo(victimId, msg);
+      break;
+    }
+  }
+}
+
+function handleGuestMsg(msg) {
+  switch (msg.t) {
+    case "welcome":
+      NET.myId = msg.id;
+      NET.players.clear();
+      for (const q of msg.players) NET.players.set(q.id, { id: q.id, name: q.name, ready: q.ready, cfg: null });
+      lobbyEls.code.textContent = `ROOM ${net.code.toUpperCase()}`;
+      lobbyEls.panel.classList.remove("hidden");
+      updateLobbyUI();
+      netStatus("");
+      ui.els.title.classList.add("hidden");
+      ui.wipe(() => enterFind());
+      break;
+    case "busy":
+      netStatus("that race already started — try hosting your own!");
+      net.close();
+      NET.mode = "solo";
+      break;
+    case "join":
+      NET.players.set(msg.id, { id: msg.id, name: msg.name, ready: false, cfg: null });
+      updateLobbyUI();
+      break;
+    case "ready": {
+      const p = NET.players.get(msg.id);
+      if (p) { p.ready = true; p.name = msg.name ?? p.name; }
+      updateLobbyUI();
+      break;
+    }
+    case "leave":
+      removeParticipant(msg.id);
+      break;
+    case "start":
+      NET.started = true;
+      beginNetRace(msg.players, msg.bots);
+      break;
+    case "s":
+      if (msg.id !== NET.myId) routeSnapshot(msg);
+      break;
+    case "e":
+      if (msg.id !== NET.myId) routeEvent(msg);
+      break;
+    case "knock":
+      G.player?.applyKnock(new THREE.Vector3(msg.from[0], 0, msg.from[1]));
+      break;
+    case "clock":
+      G.holeTime = msg.ht;
+      msg.boats?.forEach((tv, i) => { if (boats.boats[i]) boats.boats[i].t = tv; });
+      break;
+    case "holeWon": {
+      const s = NET.byId.get(msg.id);
+      if (!s || G.holeWinner) return;
+      s.throws = msg.throws ?? s.throws;
+      s.bestCombo = msg.best ?? s.bestCombo;
+      s.tape = msg.tape ?? [];
+      s.tapeSkips = msg.skips ?? [];
+      s.finished = true;
+      holeWon(s);
+      break;
+    }
+    case "nextHole":
+      gotoHole(msg.idx);
+      break;
+    case "end":
+      if (G.replay) G.pendingEnd = msg.rows;
+      else endMatch(msg.rows);
+      break;
+  }
+}
+
+function routeSnapshot(msg) {
+  const s = NET.byId.get(msg.id);
+  if (!s || !s.isRemote) return;
+  s.netTarget = [msg.p[0], msg.p[1], msg.p[2], msg.ry];
+  s.state = msg.st;
+  s.skips = msg.sk ?? s.skips;
+}
+
+function routeEvent(msg) {
+  const s = NET.byId.get(msg.id);
+  if (!s || !s.isRemote) return;
+  const d = msg.d ?? {};
+  const data = {
+    skimmer: s,
+    at: d.at ? new THREE.Vector3(d.at[0], d.at[1], d.at[2]) : s.pos.clone(),
+    n: d.n, speed: d.speed, power: d.power,
+    victim: d.victim != null ? NET.byId.get(d.victim) : undefined,
+  };
+  if (msg.type === "throw") { s.throws++; s.totalThrows++; s.skips = 0; }
+  if (msg.type === "skip") s.bestCombo = Math.max(s.bestCombo, d.n ?? 0);
+  if (msg.type === "flag") { s.finished = true; return; } // host declares the win
+  // snap the rock to the event spot so effects line up despite interpolation lag
+  if (data.at && msg.type !== "splashHit") s.pos.copy(data.at);
+  onSkimmerEvent(msg.type, data);
+}
+
+function netSendEvent(s, type, data) {
+  const d = {};
+  if (data.at) d.at = [+data.at.x.toFixed(2), +data.at.y.toFixed(2), +data.at.z.toFixed(2)];
+  if (data.n != null) d.n = data.n;
+  if (data.speed != null) d.speed = +data.speed.toFixed(1);
+  if (data.power != null) d.power = +data.power.toFixed(2);
+  if (data.victim) d.victim = data.victim.netId;
+  if (type === "flag") { d.tape = s.tape; d.skips = s.tapeSkips; }
+  const msg = { t: "e", id: s.netId, type, d };
+  if (NET.mode === "host") net.broadcast(msg);
+  else net.send(msg);
+}
+
 // ------------------------------------------------------------------ phase: FIND
 const beachSpot = (() => {
   // a nice patch of sand on the south shore
@@ -466,8 +764,107 @@ ui.els.phaseNext.addEventListener("click", () => {
   audio.pip(true);
   if (G.state === "find" && G.candidateIdx >= 0) enterShape();
   else if (G.state === "shape") enterPaint();
-  else if (G.state === "paint") startRace();
+  else if (G.state === "paint") {
+    if (NET.mode === "solo") startRace();
+    else enterNetReady();
+  }
 });
+
+// ------------------------------------------------------------------ net ready + start
+function enterNetReady() {
+  G.state = "netlobby";
+  ui.showPhase("READY!", "waiting for the other skippers…");
+  ui.els.phaseNext.classList.add("hidden");
+  ui.els.paintUi.classList.add("hidden");
+  const cfg = rockCfg(G.playerRock);
+  const me = NET.players.get(NET.myId);
+  if (me) { me.ready = true; me.cfg = cfg; me.name = cfg.name; }
+  if (NET.mode === "host") net.broadcast({ t: "ready", id: NET.myId, name: cfg.name });
+  else net.send({ t: "ready", rock: cfg });
+  updateLobbyUI();
+}
+
+function hostStartRace() {
+  NET.started = true;
+  lobbyEls.start.classList.add("hidden");
+  // anyone still shaping gets a default stone so the race can start
+  for (const p of NET.players.values()) {
+    if (!p.cfg) {
+      p.cfg = { seed: 500 + p.id * 31, size: 0.58, thickness: 0.5, lumpAmp: 0.16, color: "#8f9aa3", pattern: "plain", strokes: null, name: rockName(500 + p.id * 31) };
+      p.name = p.cfg.name;
+    }
+  }
+  const humans = [...NET.players.values()];
+  const botCount = Math.max(0, 8 - humans.length);
+  const bots = BOT_PERSONAS.slice(0, botCount).map((persona, i) => ({
+    id: 100 + i, name: persona.name, color: persona.color, seed: 1000 + i * 77,
+  }));
+  net.broadcast({
+    t: "start",
+    players: humans.map((p) => ({ id: p.id, name: p.name, rock: p.cfg })),
+    bots,
+  });
+  beginNetRace(humans.map((p) => ({ id: p.id, name: p.name, rock: p.cfg })), bots);
+}
+
+function beginNetRace(playersArr, botsArr) {
+  ui.hidePhase();
+  lobbyEls.panel.classList.add("hidden");
+  // finalize a straggler's rock prep if the host started early
+  if (!G.playerRock) {
+    G.playerRock = G.candidates[G.candidateIdx >= 0 ? G.candidateIdx : 2] ??
+      new Rock({ seed: (Math.random() * 1e6) | 0 });
+    if (!G.playerRock.group.parent) scene.add(G.playerRock.group);
+  }
+  for (const r of G.candidates) if (r !== G.playerRock) scene.remove(r.group);
+  G.candidates = [G.playerRock];
+
+  ui.wipe(() => {
+    G.state = "race";
+    NET.byId.clear();
+    G.racers = [];
+    G.bots = [];
+
+    const myName = rockName(G.playerRock.seed);
+    G.player = new Skimmer(G.playerRock, myName, true, tintFor(NET.myId) ?? "#ffd24a");
+    G.player.netId = NET.myId;
+    addOutline(G.playerRock.mesh, 0x16324a, { thickness: 0.05 });
+    G.playerRock.group.rotation.set(0, 0, 0);
+    G.racers.push(G.player);
+    NET.byId.set(NET.myId, G.player);
+
+    for (const p of playersArr) {
+      if (p.id === NET.myId) continue;
+      const rock = rockFromCfg(p.rock);
+      scene.add(rock.group);
+      const s = new Skimmer(rock, p.rock.name ?? p.name, false, tintFor(p.id));
+      s.isRemote = true;
+      s.netId = p.id;
+      G.racers.push(s);
+      NET.byId.set(p.id, s);
+    }
+
+    for (const b of botsArr) {
+      const rock = randomBotRock(b.seed);
+      scene.add(rock.group);
+      const s = new Skimmer(rock, b.name, false, b.color);
+      s.netId = b.id;
+      if (NET.mode === "host") {
+        const persona = BOT_PERSONAS.find((q) => q.name === b.name) ?? BOT_PERSONAS[0];
+        G.bots.push(new BotBrain(s, persona));
+      } else {
+        s.isRemote = true;
+      }
+      G.racers.push(s);
+      NET.byId.set(b.id, s);
+    }
+
+    for (const s of G.racers) s.onEvent = onSkimmerEvent;
+    ui.els.raceHud.classList.remove("hidden");
+    setThrowMode("skip");
+    setupHole(0);
+  });
+}
 
 // ------------------------------------------------------------------ phase: SHAPE
 function enterShape() {
@@ -625,6 +1022,9 @@ function onSkimmerEvent(type, data) {
   const s = data.skimmer;
   const mine = s.isPlayer;
 
+  // networked play: relay events for every skimmer we own (self + host's bots)
+  if (NET.mode !== "solo" && NET.started && !s.isRemote) netSendEvent(s, type, data);
+
   switch (type) {
     case "skip": {
       particles.skipSplash(data.at, s.vel, Math.min(1, data.speed / 20));
@@ -684,6 +1084,15 @@ function onSkimmerEvent(type, data) {
     }
     case "splashHit": {
       const victim = data.victim;
+      if (!victim) break;
+      // we detected the hit on a remote stone — tell their client to sink it
+      if (!s.isRemote && victim.isRemote && NET.mode !== "solo") {
+        const msg = { t: "knock", victim: victim.netId, from: [s.pos.x, s.pos.z] };
+        if (NET.mode === "host") {
+          if (victim.netId >= 100) NET.byId.get(victim.netId)?.applyKnock(s.pos);
+          else net.sendTo(victim.netId, msg);
+        } else net.send(msg);
+      }
       const sc = worldToScreen(victim.pos);
       if (!sc.behind) ui.popup(sc.x, sc.y - 10, victim.isPlayer ? "YOU GOT SPLASHED!" : "SPLASHED!", {
         size: victim.isPlayer ? 34 : 24, color: "#ff5470",
@@ -742,7 +1151,12 @@ function onSkimmerEvent(type, data) {
       break;
     }
     case "flag": {
-      if (!G.holeWinner) holeWon(s);
+      if (NET.mode === "guest") {
+        // netSendEvent shipped our tape to the host — the host declares
+        if (s.isPlayer) s.finished = true;
+      } else if (!G.holeWinner) {
+        declareHoleWon(s);
+      }
       break;
     }
     case "throw": {
@@ -753,6 +1167,22 @@ function onSkimmerEvent(type, data) {
 }
 
 // ------------------------------------------------------------------ hole win / end
+/** authoritative win call (solo + host). Guests receive holeWon messages. */
+function declareHoleWon(s, tapeOverride = null) {
+  if (G.holeWinner) return;
+  if (tapeOverride?.tape) {
+    s.tape = tapeOverride.tape;
+    s.tapeSkips = tapeOverride.skips ?? [];
+  }
+  if (NET.mode === "host") {
+    net.broadcast({
+      t: "holeWon", id: s.netId, throws: s.throws, best: s.bestCombo,
+      tape: s.tape, skips: s.tapeSkips,
+    });
+  }
+  holeWon(s);
+}
+
 function holeWon(s) {
   G.holeWinner = s;
   s.holesWon++;
@@ -846,6 +1276,19 @@ function endReplay() {
   G.replay = null;
   letterboxEl.classList.remove("on");
   if (G.state === "race") ui.els.raceHud.classList.remove("hidden");
+  // a host decision may have arrived mid-replay
+  if (G.pendingHole != null) {
+    const h = G.pendingHole;
+    G.pendingHole = null;
+    ui.wipe(() => setupHole(h));
+    return;
+  }
+  if (G.pendingEnd) {
+    const rows = G.pendingEnd;
+    G.pendingEnd = null;
+    endMatch(rows);
+    return;
+  }
   const flag = currentFlagV3();
   cam.mode = "closeup";
   cam.pos.set(flag.x + 10, 7, flag.z + 10);
@@ -854,6 +1297,7 @@ function endReplay() {
 }
 
 function holeTimeout() {
+  if (NET.mode === "guest") return; // host calls it
   // closest stone takes it
   let best = null, bestD = Infinity;
   const flag = currentFlagV3();
@@ -863,6 +1307,9 @@ function holeTimeout() {
   }
   if (best && !G.holeWinner) {
     if (fishing.active) fishing.cancel();
+    if (NET.mode === "host") {
+      net.broadcast({ t: "holeWon", id: best.netId, throws: best.throws, best: best.bestCombo, tape: [], skips: [] });
+    }
     G.holeWinner = best;
     best.holesWon++;
     ui.banner("TIME!", `${best.isPlayer ? "you were" : best.name + " was"} closest to the flag`, 2.2);
@@ -871,22 +1318,38 @@ function holeTimeout() {
   }
 }
 
+function gotoHole(idx) {
+  if (G.replay) { G.pendingHole = idx; return; }
+  ui.wipe(() => setupHole(idx));
+}
+
+function standingsRows() {
+  return [...G.racers]
+    .sort((a, b) => b.holesWon - a.holesWon || a.totalThrows - b.totalThrows)
+    .map((s) => ({ name: s.name, color: s.tint, holes: s.holesWon, throws: s.totalThrows, id: s.netId, me: s.isPlayer }));
+}
+
 function nextHoleOrResults() {
+  if (NET.mode === "guest") return; // host drives hole transitions
   if (G.hole + 1 < HOLES.length) {
-    ui.wipe(() => setupHole(G.hole + 1));
+    if (NET.mode === "host") net.broadcast({ t: "nextHole", idx: G.hole + 1 });
+    gotoHole(G.hole + 1);
   } else {
-    endMatch();
+    const rows = standingsRows();
+    if (NET.mode === "host") net.broadcast({ t: "end", rows });
+    endMatch(rows);
   }
 }
 
-function endMatch() {
+function endMatch(rowsIn = null) {
   G.state = "results";
   if (fishing.active) fishing.cancel();
   ui.els.raceHud.classList.add("hidden");
   hidePreview();
-  const rows = [...G.racers]
-    .sort((a, b) => b.holesWon - a.holesWon || a.totalThrows - b.totalThrows)
-    .map((s) => ({ name: s.name, color: s.tint, holes: s.holesWon, throws: s.totalThrows, me: s.isPlayer }));
+  const rows = (rowsIn ?? standingsRows()).map((r) => ({
+    ...r,
+    me: NET.mode === "solo" ? r.me : r.id === NET.myId,
+  }));
   const playerWon = rows[0]?.me;
   ui.showResults(rows, playerWon);
   if (playerWon) {
@@ -917,18 +1380,34 @@ function updateRace(dt) {
     },
   };
 
-  // timer
+  // timer (host/solo authoritative; guests track + resync from clock messages)
   if (!G.holeWinner) {
     G.holeTime -= dt;
     if (G.holeTime <= 0) holeTimeout();
   }
+  if (NET.mode === "host" && NET.started && !G.holeWinner) {
+    NET.clockAccum += dt;
+    if (NET.clockAccum >= 2) {
+      NET.clockAccum = 0;
+      net.broadcast({ t: "clock", ht: +G.holeTime.toFixed(1), boats: boats.boats.map((b) => +b.t.toFixed(2)) });
+    }
+  }
 
   G.throwCooldown = Math.max(0, G.throwCooldown - dt);
 
-  // physics for everyone
+  // physics for everyone (remote stones interpolate toward their snapshots)
   for (const s of G.racers) {
     if (G.replay?.active && s === G.replay.skimmer) continue; // killcam owns this mesh
-    if (s.state === "fishing" && s.isPlayer) { /* frozen while minigame runs */ }
+    if (s.isRemote) {
+      if (s.netTarget) {
+        s.pos.x = damp(s.pos.x, s.netTarget[0], 12, dt);
+        s.pos.y = damp(s.pos.y, s.netTarget[1], 12, dt);
+        s.pos.z = damp(s.pos.z, s.netTarget[2], 12, dt);
+        s.mesh.position.copy(s.pos);
+        s.mesh.rotation.y += (s.netTarget[3] - s.mesh.rotation.y) * Math.min(1, 10 * dt);
+      }
+      s.rock.update(dt);
+    } else if (s.state === "fishing" && s.isPlayer) { /* frozen while minigame runs */ }
     else s.step(ctx);
 
     // flight trails — rocks on a 5+ chain catch fire
@@ -938,13 +1417,35 @@ function updateRace(dt) {
     }
   }
 
-  // player sink -> fishing minigame
+  // stream snapshots for the stones we own
+  if (NET.mode !== "solo" && NET.started) {
+    NET.snapAccum += dt;
+    if (NET.snapAccum >= 0.1) {
+      NET.snapAccum = 0;
+      for (const s of G.racers) {
+        if (s.isRemote) continue;
+        if (!s.isPlayer && NET.mode !== "host") continue;
+        const msg = {
+          t: "s", id: s.netId,
+          p: [+s.pos.x.toFixed(2), +s.pos.y.toFixed(2), +s.pos.z.toFixed(2)],
+          ry: +s.mesh.rotation.y.toFixed(2),
+          st: s.state, sk: s.skips,
+        };
+        if (NET.mode === "host") net.broadcast(msg);
+        else net.send(msg);
+      }
+    }
+  }
+
+  // player sink -> dive underwater and fish it back
   const p = G.player;
   if (p.state === "sinking" && p.sinkT > 0.85 && !fishing.active) {
     p.state = "fishing";
     const spot = p.pos.clone();
-    fishing.start((clean, tries) => {
-      const penalty = tries * 1.5; // sloppier reeling drifts you backward
+    spot.y = 0;
+    cam.mode = "fishing";
+    fishing.start(spot, p.rock, (clean, hits) => {
+      const penalty = hits * 1.2; // every fish bump drifts you back toward the tee
       const tee = holeTee();
       const back = new THREE.Vector3(tee.x - spot.x, 0, tee.z - spot.z);
       back.y = 0;
@@ -953,7 +1454,7 @@ function updateRace(dt) {
       particles.sinkSplash(p.pos, 0.8);
       audio.settle();
       const sc = worldToScreen(p.pos);
-      ui.popup(sc.x, sc.y - 30, clean ? "GOT IT!" : "finally...", { size: 28, color: "#6fe07a" });
+      if (!sc.behind) ui.popup(sc.x, sc.y - 30, clean ? "CLEAN CATCH!" : "got it back...", { size: 28, color: "#6fe07a" });
       cam.mode = "aim";
       G.throwCooldown = 0.4;
       p.rock.kickEyes(1.5);
@@ -968,7 +1469,8 @@ function updateRace(dt) {
   // camera follows the action
   if (cam.mode !== "intro" && !G.replay) {
     if (p.state === "flying") cam.mode = "flight";
-    else if (p.state === "sinking" || p.state === "fishing") {
+    else if (p.state === "fishing" && fishing.active) cam.mode = "fishing";
+    else if (p.state === "sinking") {
       if (cam.mode !== "closeup") cam.mode = "flight"; // hover where it went down
     } else if (!G.holeWinner && cam.mode !== "aim") {
       cam.mode = "aim";
@@ -1039,7 +1541,7 @@ function frame(now) {
   particles.update(dt);
   cel.update(dt);
   audio.update(rawDt);
-  fishing.update(rawDt);
+  fishing.update(rawDt, G.elapsed, pointer.x / window.innerWidth);
   if (G.replay?.active) updateReplay(rawDt);
 
   switch (G.state) {
@@ -1055,6 +1557,10 @@ function frame(now) {
       break;
     case "shape": updateShape(dt); G.playerRock.update(dt); break;
     case "paint": updatePaint(dt); G.playerRock.update(dt); break;
+    case "netlobby":
+      G.playerRock.group.rotation.y += dt * 0.8;
+      G.playerRock.update(dt);
+      break;
     case "race": updateRace(dt); break;
   }
 

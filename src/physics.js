@@ -43,6 +43,10 @@ export class Skimmer {
     this.bobPhase = Math.random() * 10;
     this.knocked = false; // sunk because a rival splashed us
     this.onEvent = null; // (type, data) => {}
+    // networking
+    this.isRemote = false; // driven by snapshots, not local physics
+    this.netId = -1;
+    this.netTarget = null; // latest snapshot [x, y, z, ry]
     // flight recorder for the killcam (ring buffer of the last ~2.5s)
     this.tape = [];
     this.tapeSkips = [];
@@ -292,20 +296,32 @@ export class Skimmer {
 
   _knockRival(victim, ctx) {
     if (victim.state === "sinking" || victim.state === "fishing") return;
-    _tmp.subVectors(victim.pos, this.pos);
+    if (victim.isRemote) {
+      // their client owns the physics — we just fire the juice + let main
+      // relay a knock message to the victim
+      victim.rock.kickEyes(2.5);
+      this._emit("splashHit", { victim, at: victim.pos.clone() });
+      return;
+    }
+    victim.applyKnock(this.pos);
+    this._emit("splashHit", { victim, at: victim.pos.clone() });
+  }
+
+  /** get punted by a splash blast (local or via network) */
+  applyKnock(fromPos) {
+    if (this.state === "sinking" || this.state === "fishing") return;
+    _tmp.subVectors(this.pos, fromPos);
     _tmp.y = 0;
     if (_tmp.lengthSq() < 0.01) _tmp.set(1, 0, 0);
     _tmp.normalize();
-    victim.vel.set(_tmp.x * 6, 4.5, _tmp.z * 6);
-    victim.pos.y += 0.3;
-    victim.state = "flying"; // brief tumble...
-    victim.knocked = true; // ...then _waterContact turns steep entry into a sink
-    victim.lastThrowMode = "knocked";
-    victim.skips = 99; // ensure no skip credit
-    victim.rock.kickEyes(2.5);
-    // force a sink on next contact by making the entry read steep: zero flat can't save it
-    victim._forceSink = true;
-    this._emit("splashHit", { victim, at: victim.pos.clone() });
+    this.vel.set(_tmp.x * 6, 4.5, _tmp.z * 6);
+    this.pos.y += 0.3;
+    this.state = "flying"; // brief tumble...
+    this.knocked = true; // ...then _waterContact turns steep entry into a sink
+    this.lastThrowMode = "knocked";
+    this.skips = 99; // ensure no skip credit
+    this.rock.kickEyes(2.5);
+    this._forceSink = true;
   }
 
   _checkFlag(ctx, atRest) {

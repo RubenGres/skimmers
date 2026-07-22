@@ -291,6 +291,22 @@ export class Rock {
     this._composite();
   }
 
+  /** serialize brush strokes for the wire (multiplayer rock skins) */
+  strokesDataURL() {
+    return this.strokeCanvas.toDataURL("image/png");
+  }
+
+  /** apply a remote player's strokes */
+  applyStrokesDataURL(url) {
+    if (!url) return;
+    const img = new Image();
+    img.onload = () => {
+      this.strokeCtx.drawImage(img, 0, 0);
+      this._composite();
+    };
+    img.src = url;
+  }
+
   // ---- stats driving the skip physics ----
   /** 0..1: how flat/smooth — raises skip angle tolerance + restitution */
   get flat() {
