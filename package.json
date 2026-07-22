@@ -1,1 +1,9 @@
-{ "name": "skimmers", "type": "module", "private": true }
+{
+  "name": "skimmers",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "npx --yes serve --no-clipboard -l 8741 .",
+    "start": "npx --yes serve --no-clipboard -l 8741 ."
+  }
+}

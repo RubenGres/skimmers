@@ -426,7 +426,15 @@ function onPointerDown(e) {
       if (idx >= 0) selectCandidate(idx);
     }
   } else if (G.state === "shape") {
-    G.grinding = true;
+    // drag ON the stone grinds; drag anywhere else grabs and spins it
+    const hits = raycastFrom(e, [G.playerRock.mesh]);
+    if (hits.length) {
+      G.grinding = true;
+    } else {
+      G.paintDrag.mode = "rotate";
+      G.paintDrag.lastX = e.clientX;
+      G.paintDrag.lastY = e.clientY;
+    }
   } else if (G.state === "paint") {
     // drag ON the stone paints; drag anywhere else grabs and spins it
     const hits = raycastFrom(e, [G.playerRock.mesh]);
@@ -952,7 +960,22 @@ function enterShape() {
 
 function updateShape(dt) {
   const rock = G.playerRock;
-  rock.group.rotation.y += dt * (G.grinding ? 1.6 : 0.5);
+  const pd = G.paintDrag;
+  if (pointer.down && pd.mode === "rotate") {
+    // grab & spin to reach every lump — yaw free, tilt clamped
+    const dx = pointer.x - pd.lastX;
+    const dy = pointer.y - pd.lastY;
+    rock.group.rotation.y += dx * 0.009;
+    rock.group.rotation.x = clamp(rock.group.rotation.x + dy * 0.006, -1.2, 1.2);
+    pd.spinVel = clamp(dx * 0.009 / Math.max(dt, 1 / 240), -7, 7);
+    pd.lastX = pointer.x;
+    pd.lastY = pointer.y;
+  } else if (G.grinding) {
+    rock.group.rotation.y += dt * 0.5; // slow turn under the grindstone
+  } else {
+    pd.spinVel = damp(pd.spinVel, 0.6, 2.2, dt);
+    rock.group.rotation.y += pd.spinVel * dt;
+  }
   if (G.grinding) {
     const hits = raycastFrom({ clientX: pointer.x, clientY: pointer.y }, [rock.mesh]);
     if (hits.length) {

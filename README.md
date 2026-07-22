@@ -61,7 +61,7 @@ Sink your stone and the camera follows it down:
 ## Run it locally
 
 ```sh
-python3 -m http.server 8741        # or: npx serve .
+npm run dev
 # open http://localhost:8741
 ```
 
