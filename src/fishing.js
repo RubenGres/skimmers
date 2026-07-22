@@ -437,14 +437,15 @@ export class Fishing {
     }
 
     // lay the segment cylinders along the points
+    // (rotating +Y by θ gives (-sinθ, cosθ), so θ = atan2(-dx, dy))
     for (let i = 0; i < n - 1; i++) {
       const a = pts[i], b = pts[i + 1];
       const dx = b.x - a.x, dy = b.y - a.y;
       const len = Math.max(0.02, Math.hypot(dx, dy));
       const seg = this.ropeSegs[i];
-      seg.scale.y = len;
+      seg.scale.y = len * 1.06; // slight overlap hides the joints
       seg.position.set((a.x + b.x) / 2, (a.y + b.y) / 2, 0);
-      seg.rotation.z = Math.atan2(dx, dy);
+      seg.rotation.z = Math.atan2(-dx, dy);
     }
   }
 
