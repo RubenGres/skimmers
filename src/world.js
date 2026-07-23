@@ -304,6 +304,9 @@ export class FlagBuoy {
 // A floating wooden pontoon: the launch pad every rock starts from. Sits at the
 // hole's tee, its long axis pointing down-fairway so stones skip off the front
 // edge. Bobs gently on the swell like the flag buoy.
+// deck-top height above the waterline — physics seats resting tee rocks here
+export const PONTOON_DECK = 0.57;
+
 export class Pontoon {
   constructor(scene) {
     this.group = new THREE.Group();
@@ -311,14 +314,16 @@ export class Pontoon {
     const woodDark = new THREE.MeshStandardMaterial({ color: 0x7c4a1e, flatShading: true });
     const woodMid = new THREE.MeshStandardMaterial({ color: 0x93571f, flatShading: true });
 
-    // sized to comfortably hold the spread-4 cluster of starting rocks
-    const LEN = 11, WID = 9;
+    // a raised bridge: the tee cluster sits near the flag end (+X) and the
+    // long tail runs back onto the beach behind the tee
+    const FRONT = 5.5, BACK = -22, WID = 9;
+    const LEN = FRONT - BACK, off = (FRONT + BACK) / 2;
 
     // cross-beams that the deck planks rest on (run across the short axis)
     const beams = new THREE.Group();
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 8; i++) {
       const beam = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.5, WID + 0.6), woodDark);
-      beam.position.set(-LEN / 2 + 0.9 + (i / 3) * (LEN - 1.8), -0.28, 0);
+      beam.position.set(BACK + 0.9 + (i / 7) * (LEN - 1.8), -0.28, 0);
       beams.add(beam);
     }
     this.group.add(beams);
@@ -331,7 +336,7 @@ export class Pontoon {
         new THREE.BoxGeometry(LEN, 0.24, plankW * 0.86),
         i % 2 ? wood : woodMid
       );
-      plank.position.set(0, 0, -WID / 2 + plankW * (i + 0.5));
+      plank.position.set(off, 0, -WID / 2 + plankW * (i + 0.5));
       plank.receiveShadow = true;
       this.group.add(plank);
     }
@@ -339,26 +344,29 @@ export class Pontoon {
     // rimming trim so the edges read cleanly against the water
     for (const side of [-1, 1]) {
       const rail = new THREE.Mesh(new THREE.BoxGeometry(LEN, 0.28, 0.32), woodDark);
-      rail.position.set(0, 0.05, side * (WID / 2 - 0.16));
+      rail.position.set(off, 0.05, side * (WID / 2 - 0.16));
       this.group.add(rail);
     }
 
-    // support piles at the corners, plunging into the water
-    for (const sx of [-1, 1]) {
+    // support piles along both sides — unit-height cylinders that setPose
+    // stretches down to the lake bed (or the beach) under each hole's tee
+    this.piles = [];
+    const nPiles = 5;
+    for (let i = 0; i < nPiles; i++) {
+      const px = BACK + 0.7 + (i / (nPiles - 1)) * (LEN - 1.4);
       for (const sz of [-1, 1]) {
-        const pile = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.26, 0.3, 2.6, 7),
-          woodDark
-        );
-        pile.position.set(sx * (LEN / 2 - 0.7), -1.35, sz * (WID / 2 - 0.7));
+        const pile = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.3, 1, 7), woodDark);
+        pile.userData.px = px;
+        pile.userData.pz = sz * (WID / 2 - 0.7);
         this.group.add(pile);
+        this.piles.push(pile);
       }
     }
 
     // a couple of little mooring posts on the down-fairway edge (+X)
     for (const sz of [-1, 1]) {
       const post = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 0.7, 6), woodMid);
-      post.position.set(LEN / 2 - 0.35, 0.42, sz * (WID / 2 - 1.1));
+      post.position.set(FRONT - 0.35, 0.42, sz * (WID / 2 - 1.1));
       this.group.add(post);
     }
 
@@ -366,20 +374,24 @@ export class Pontoon {
     scene.add(this.group);
   }
 
-  /** place at the tee, long axis (+X) pointing toward the flag */
+  /** place at the tee, long axis (+X) pointing toward the flag. The bridge
+   *  is rigid — no wave sway — with each pile stretched down to whatever is
+   *  under it: the lake bed in the water, the sand where it meets the beach. */
   setPose(x, z, angleToFlag) {
-    this.group.position.set(x, WATER_Y, z);
+    this.group.position.set(x, WATER_Y + PONTOON_DECK - 0.12, z);
     this.group.rotation.y = -angleToFlag; // world +X row rotates to face the flag
     this.group.visible = true;
-  }
-
-  update(dt, elapsed, water) {
-    if (!this.group.visible) return;
-    const p = this.group.position;
-    p.y = WATER_Y + water.heightAt(p.x, p.z, elapsed) * 1.1 - 0.1;
-    // slow raft roll — kept subtle so the starting rocks don't look adrift
-    this.group.rotation.z = Math.sin(elapsed * 0.7) * 0.02;
-    this.group.rotation.x = Math.cos(elapsed * 0.55) * 0.02;
+    this.group.updateMatrixWorld(true);
+    const w = new THREE.Vector3();
+    for (const pile of this.piles) {
+      w.set(pile.userData.px, 0, pile.userData.pz);
+      this.group.localToWorld(w);
+      const sh = shoreHeight(w.x, w.z);
+      const groundY = sh > -0.1 ? sh : -lakeDepthAt(w.x, w.z);
+      const len = Math.max(0.5, this.group.position.y - 0.2 - groundY + 0.6);
+      pile.scale.y = len;
+      pile.position.set(pile.userData.px, -0.2 - len / 2, pile.userData.pz);
+    }
   }
 }
 
@@ -686,10 +698,12 @@ export class CourseMarkers {
 // While a rival's stone is being reeled back, a bobber sits on the surface
 // above it with a line running down to the sunken rock — you can watch who's
 // paying the price, from above the water or during your own dive.
+const RIVAL_REEL_SPEED = 6; // rival stones reel up a touch slower than the player's 7.5
+
 export class RivalLines {
   constructor(scene) {
     this.rigs = [];
-    this.dropYs = new Map();
+    this.jobs = new Map(); // skimmer -> { rig, mode: down|reel, lineY }
     const lineMat = new THREE.MeshBasicMaterial({ color: 0xe8e8e8 });
     const redMat = new THREE.MeshStandardMaterial({ color: 0xd94040, flatShading: true });
     const whiteMat = new THREE.MeshStandardMaterial({ color: 0xf4f0e6, flatShading: true });
@@ -707,46 +721,79 @@ export class RivalLines {
       g.add(line);
       g.visible = false;
       scene.add(g);
-      this.rigs.push({ g, bobber, line, phase: Math.random() * 10 });
+      this.rigs.push({ g, bobber, line, phase: Math.random() * 10, busy: false });
     }
   }
 
-  /** show a rig over every rival currently fishing; exclude = local player */
+  /**
+   * A rig over every rival currently fishing; exclude = local player.
+   * Same choreography as the player's dive: the line drops to the sunken
+   * stone, hooks it, reels it back up, and dangles it at the surface until
+   * its owner takes it back. Remote stones animate their own y (their client
+   * runs the minigame), so their line just tracks the rock.
+   */
   update(dt, elapsed, water, racers, exclude) {
-    let i = 0;
-    const dropping = new Set();
+    const active = new Set();
     for (const s of racers ?? []) {
       if (s === exclude || s.state !== "fishing") continue;
-      const rx = s.mesh.position.x, rz = s.mesh.position.z;
-      const bedY = -lakeDepthAt(rx, rz) + 0.4;
-      if (s.mesh.position.y > bedY + 0.01) continue;
-      if (i >= this.rigs.length) break;
-      const rig = this.rigs[i++];
+      let job = this.jobs.get(s);
+      if (!job) {
+        // the line waits until the stone has settled out of sight
+        const bedY = -lakeDepthAt(s.pos.x, s.pos.z) + 0.4;
+        const settled = s.isRemote ? s.mesh.position.y < -0.3 : s.mesh.position.y <= bedY + 0.01;
+        if (!settled) { active.add(s); continue; }
+        const rig = this.rigs.find((r) => !r.busy);
+        if (!rig) { active.add(s); continue; }
+        rig.busy = true;
+        job = { rig, mode: "down", lineY: water.heightAt(s.pos.x, s.pos.z, elapsed) - 1.1 };
+        this.jobs.set(s, job);
+      }
+      active.add(s);
+      const rig = job.rig;
       rig.g.visible = true;
+      const rx = s.mesh.position.x, rz = s.mesh.position.z;
       const sway = Math.sin(elapsed * 1.3 + rig.phase) * 0.2;
-      const topY = water.heightAt(rx, rz, elapsed) + Math.sin(elapsed * 2.2 + rig.phase) * 0.05;
-      rig.bobber.position.set(rx + sway, topY + 0.08, rz);
+      const surfY = water.heightAt(rx, rz, elapsed) + Math.sin(elapsed * 2.2 + rig.phase) * 0.05;
+      rig.bobber.position.set(rx + sway, surfY + 0.08, rz);
       rig.bobber.rotation.z = sway * 0.5;
+
       const rockTop = s.mesh.position.y + 0.35;
+      if (s.isRemote || job.mode === "down") {
+        job.lineY = Math.max(rockTop, job.lineY - HOOK_SPEED * dt);
+        if (!s.isRemote && job.lineY <= rockTop) {
+          job.mode = "reel";
+          s.hookedByLine = true; // physics stops pinning the stone to the bed
+        }
+      } else {
+        // reel up: the stone rides just under the hook, then dangles at the
+        // surface until the bot's fishing timer hands it back
+        const holdY = surfY + 0.55;
+        job.lineY = Math.min(holdY, job.lineY + RIVAL_REEL_SPEED * dt);
+        s.pos.y = job.lineY - 0.35;
+        s.mesh.position.y = s.pos.y;
+      }
+
       const lineTop = rig.bobber.position.y - 0.07;
-      const previousY = this.dropYs.get(s) ?? lineTop - 1.1;
-      const lineBottom = Math.max(rockTop, previousY - HOOK_SPEED * dt);
-      this.dropYs.set(s, lineBottom);
-      dropping.add(s);
-      const len = Math.max(0.3, lineTop - lineBottom);
+      const len = Math.max(0.3, lineTop - job.lineY);
       rig.line.scale.y = len;
-      rig.line.position.set(rx + sway * 0.5, lineBottom + len / 2, rz);
+      rig.line.position.set(rx + sway * 0.5, job.lineY + len / 2, rz);
       rig.line.rotation.z = sway * 0.12;
     }
-    for (; i < this.rigs.length; i++) this.rigs[i].g.visible = false;
-    for (const s of this.dropYs.keys()) {
-      if (!dropping.has(s)) this.dropYs.delete(s);
+    for (const [s, job] of this.jobs) {
+      if (!active.has(s)) this._release(s, job);
     }
+  }
+
+  _release(s, job) {
+    job.rig.busy = false;
+    job.rig.g.visible = false;
+    s.hookedByLine = false;
+    this.jobs.delete(s);
   }
 
   hideAll() {
+    for (const [s, job] of this.jobs) this._release(s, job);
     for (const rig of this.rigs) rig.g.visible = false;
-    this.dropYs.clear();
   }
 }
 
@@ -780,7 +827,6 @@ export class World {
   update(dt, elapsed, water) {
     swayTime.value = elapsed;
     this.flag.update(dt, elapsed, water);
-    this.pontoon.update(dt, elapsed, water);
     this.course.update(dt, elapsed, water);
     for (const d of this.ducks) d.update(dt, elapsed, water);
     for (const c of this.clouds.children) {

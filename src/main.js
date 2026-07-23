@@ -1,5 +1,5 @@
 /**
- * SKIMMERS — main loop and state machine.
+ * Skippidy Skip — main loop and state machine.
  *
  * TITLE -> FIND (pick a rock) -> SHAPE (grind it) -> PAINT -> RACE (3 holes
  * vs 7 bot rivals, all through the same Skimmer physics) -> RESULTS.
@@ -17,14 +17,14 @@ import { CelShader } from "./celshader.js";
 import { addOutline } from "./outline.js";
 import { Particles } from "./particles.js";
 import { Water, WATER_Y, LAKE_R } from "./water.js";
-import { World, shoreHeight, RivalLines } from "./world.js";
+import { World, shoreHeight, RivalLines, PONTOON_DECK } from "./world.js";
 import { Boats } from "./boats.js";
 import { Rock, ROCK_COLORS, ROCK_PATTERNS, rockName, randomBotRock, setEyeTarget } from "./rock.js";
 import { Skimmer, simulateThrow, BLAST_R } from "./physics.js";
 import { BotBrain, BOT_PERSONAS } from "./bots.js";
-import { Fishing } from "./fishing.js";
+import { Fishing, BUOY_REST } from "./fishing.js";
 import { Minimap } from "./minimap.js";
-import { Net, makeRoomCode } from "./net.js";
+import { Net, matchCode } from "./net.js";
 import * as ui from "./ui.js";
 
 // ------------------------------------------------------------------ renderer
@@ -56,7 +56,7 @@ const water = new Water(scene);
 const world = new World(scene);
 const boats = new Boats(scene);
 const particles = new Particles(scene);
-const fishing = new Fishing(scene, particles);
+const fishing = new Fishing(scene, particles, water);
 const rivalLines = new RivalLines(scene);
 const minimap = new Minimap();
 const cel = new CelShader(scene, { steps: 4, floor: 0.42, rescanSec: 1.0 });
@@ -405,6 +405,7 @@ function tryPlayerThrow() {
     }
   }
   if (p.throwRock(drag.dir, power, G.throwMode)) {
+    fishing.hideBuoy(); // leaving the buoy lie (no-op otherwise)
     cam.mode = "flight";
     G.slowmoUsed = false;
     audio.throwWhoosh(power);
@@ -491,15 +492,22 @@ ui.els.muter.addEventListener("click", () => {
 // as 10 Hz snapshots, juice fires from relayed events. The host owns match
 // flow (start, clock, hole transitions, winner calls) and pilots the bots.
 const net = new Net();
+const MAX_RACERS = 8; // course + tint palette are sized for eight
 const NET = {
   mode: "solo", // solo | host | guest
   myId: 0,
   started: false,
+  capacity: 0, // wanted humans in the room; 0 = open/unlimited (up to MAX_RACERS)
   players: new Map(), // id -> { id, name, ready, cfg }
   byId: new Map(), // netId -> Skimmer (during a race)
   snapAccum: 0,
   clockAccum: 0,
 };
+const capacityNum = (cap) => (cap === 0 ? MAX_RACERS : cap);
+const capLabel = (cap) => (cap === 0 ? "OPEN ROOM" : `${capacityNum(cap)}-PLAYER ROOM`);
+// matchmaking bookkeeping while we're probing public slots ({ cap, idx, ... })
+let matchmaking = null;
+let chosenCap = 2;
 const PLAYER_TINTS = ["#ffd24a", "#ff5470", "#37c8e0", "#6fe07a", "#9d7cf4", "#ff8a3d", "#f4f0e6", "#e0503a"];
 const tintFor = (id) => (id >= 100 ? null : PLAYER_TINTS[id % PLAYER_TINTS.length]);
 
@@ -509,10 +517,15 @@ const lobbyEls = {
   list: document.getElementById("lobby-list"),
   start: document.getElementById("start-btn"),
   hint: document.getElementById("lobby-hint"),
-  hostBtn: document.getElementById("host-btn"),
-  joinBtn: document.getElementById("join-btn"),
-  joinCode: document.getElementById("join-code"),
   status: document.getElementById("net-status"),
+  // title-screen menus
+  menuMain: document.getElementById("menu-main"),
+  menuMp: document.getElementById("menu-mp"),
+  mpBtn: document.getElementById("mp-btn"),
+  findBtn: document.getElementById("find-btn"),
+  mpBack: document.getElementById("mp-back"),
+  mpCancel: document.getElementById("mp-cancel"),
+  sizeChips: [...document.querySelectorAll(".size-chip")],
 };
 
 function netStatus(text) {
@@ -548,45 +561,162 @@ function updateLobbyUI() {
       `<span>${p.ready ? "ready" : "shaping…"}</span>`;
     lobbyEls.list.appendChild(row);
   }
-  const allReady = [...NET.players.values()].every((p) => p.ready);
+  // lobby subtitle: how the room fills / how the race starts
+  const n = NET.players.size;
+  if (NET.capacity === 0) {
+    lobbyEls.hint.textContent = `open room · ${n} here — host starts, empty seats become bots`;
+  } else {
+    const target = capacityNum(NET.capacity);
+    lobbyEls.hint.textContent = n < target
+      ? `matched room · waiting for skippers (${n}/${target})…`
+      : `room full (${n}/${target}) — race starts once everyone's ready`;
+  }
+
+  const players = [...NET.players.values()];
+  const allReady = players.every((p) => p.ready);
   if (NET.mode === "host" && NET.players.get(0)?.ready && !NET.started) {
     lobbyEls.start.classList.remove("hidden");
-    lobbyEls.start.textContent = allReady ? "Start race!" : `Start (${[...NET.players.values()].filter((p) => p.ready).length} ready)`;
+    lobbyEls.start.textContent = allReady ? "Start race!" : `Start (${players.filter((p) => p.ready).length} ready)`;
   }
 }
 
-lobbyEls.hostBtn.addEventListener("click", () => {
+// -- title menu: solo vs multiplayer -----------------------------------------
+lobbyEls.mpBtn.addEventListener("click", () => {
   if (NET.mode !== "solo") return;
   audio.pip(true);
-  netStatus("opening lobby…");
-  const code = makeRoomCode();
-  attachNetHandlers();
-  net.hostRoom(code, (err) => {
-    if (err) { netStatus("couldn't open a lobby — try again"); net.close(); return; }
-    NET.mode = "host";
-    NET.myId = 0;
-    NET.players.set(0, { id: 0, name: "Host", ready: false, cfg: null });
-    lobbyEls.code.textContent = `ROOM ${code}`;
-    lobbyEls.panel.classList.remove("hidden");
-    updateLobbyUI();
-    ui.els.title.classList.add("hidden");
-    ui.wipe(() => enterFind());
-  });
+  lobbyEls.menuMain.classList.add("hidden");
+  lobbyEls.menuMp.classList.remove("hidden");
+  selectCap(chosenCap);
+  netStatus("");
 });
 
-lobbyEls.joinBtn.addEventListener("click", () => {
-  if (NET.mode !== "solo") return;
-  const code = lobbyEls.joinCode.value.trim().toUpperCase();
-  if (code.length < 4) { netStatus("enter the 4-letter room code"); return; }
+lobbyEls.mpBack.addEventListener("click", () => {
+  audio.pip(false);
+  cancelMatchmaking();
+  lobbyEls.menuMp.classList.add("hidden");
+  lobbyEls.menuMain.classList.remove("hidden");
+  netStatus("");
+});
+
+function selectCap(cap) {
+  chosenCap = cap;
+  for (const c of lobbyEls.sizeChips) c.classList.toggle("sel", +c.dataset.cap === cap);
+}
+lobbyEls.sizeChips.forEach((c) =>
+  c.addEventListener("click", () => { if (matchmaking) return; audio.pip(true); selectCap(+c.dataset.cap); }),
+);
+
+lobbyEls.findBtn.addEventListener("click", () => {
+  if (matchmaking || NET.mode !== "solo") return;
   audio.pip(true);
-  netStatus("joining " + code + "…");
+  startMatchmaking(chosenCap);
+});
+
+lobbyEls.mpCancel.addEventListener("click", () => {
+  audio.pip(false);
+  cancelMatchmaking();
+});
+
+// -- serverless matchmaking --------------------------------------------------
+// Pair up randoms with no matchmaking server: probe the shared, well-known
+// PeerJS slots for the chosen capacity (mm-<cap>-1, mm-<cap>-2, …). If a slot
+// already has a host with room, we join it; if a slot is empty, we claim it as
+// host; if it's full/busy we bump to the next slot. Whoever lands as host runs
+// the match exactly like the old "host a lobby" flow.
+function startMatchmaking(cap) {
+  NET.mode = "solo";
+  NET.capacity = cap;
+  NET.players.clear();
+  matchmaking = { cap, idx: 1, helloTimer: null };
+  lobbyEls.findBtn.classList.add("hidden");
+  lobbyEls.mpBack.classList.add("hidden");
+  lobbyEls.mpCancel.classList.remove("hidden");
+  attachNetHandlers();
+  tryMatchSlot();
+}
+
+function cancelMatchmaking() {
+  if (!matchmaking) return;
+  clearTimeout(matchmaking.helloTimer);
+  matchmaking = null;
+  net.close();
+  NET.mode = "solo";
+  NET.players.clear();
+  lobbyEls.findBtn.classList.remove("hidden");
+  lobbyEls.mpBack.classList.remove("hidden");
+  lobbyEls.mpCancel.classList.add("hidden");
+  netStatus("");
+}
+
+function tryMatchSlot() {
+  if (!matchmaking) return;
+  const { cap, idx } = matchmaking;
+  if (idx > 40) { netStatus("all rooms are busy — try again in a bit"); cancelMatchmaking(); return; }
+  netStatus(cap === 0 ? "finding an open room…" : `finding a ${capacityNum(cap)}-player room…`);
+  const code = matchCode(cap, idx);
+  net.close(); // drop any peer from the previous slot attempt
   attachNetHandlers();
   net.joinRoom(code, (err) => {
-    if (err) { netStatus("room not found — check the code"); net.close(); NET.mode = "solo"; return; }
+    if (!matchmaking) { net.close(); return; }
+    if (err) {
+      if (err.type === "peer-unavailable") becomeMatchHost(code); // empty slot -> host it
+      else setTimeout(() => { if (matchmaking) tryMatchSlot(); }, 400); // transient -> retry
+      return;
+    }
     NET.mode = "guest";
     net.send({ t: "hello" });
+    // if the host never answers (mid-start, flaky), roll to the next slot
+    matchmaking.helloTimer = setTimeout(() => {
+      if (matchmaking) { matchmaking.idx++; tryMatchSlot(); }
+    }, 4500);
   });
-});
+}
+
+function becomeMatchHost(code) {
+  if (!matchmaking) return;
+  net.close();
+  attachNetHandlers();
+  net.hostRoom(code, (err) => {
+    if (!matchmaking) return;
+    if (err) { // someone grabbed the slot first — go back to joining it
+      net.close();
+      setTimeout(() => { if (matchmaking) tryMatchSlot(); }, 250);
+      return;
+    }
+    NET.mode = "host";
+    NET.myId = 0;
+    NET.players.clear();
+    NET.players.set(0, { id: 0, name: "You", ready: false, cfg: null });
+    settleIntoRoom();
+  });
+}
+
+// We've landed in a room (as host or guest); leave the title and start prepping.
+function settleIntoRoom() {
+  if (matchmaking) clearTimeout(matchmaking.helloTimer);
+  matchmaking = null;
+  netStatus("");
+  lobbyEls.code.textContent = capLabel(NET.capacity);
+  lobbyEls.panel.classList.remove("hidden");
+  updateLobbyUI();
+  // reset the title menu for next time (e.g. after a reload-less return)
+  lobbyEls.menuMp.classList.add("hidden");
+  lobbyEls.menuMain.classList.remove("hidden");
+  lobbyEls.findBtn.classList.remove("hidden");
+  lobbyEls.mpBack.classList.remove("hidden");
+  lobbyEls.mpCancel.classList.add("hidden");
+  ui.els.title.classList.add("hidden");
+  ui.wipe(() => enterFind());
+}
+
+// Host: kick off automatically once the room is full and everyone's ready.
+function maybeAutoStart() {
+  if (NET.mode !== "host" || NET.started) return;
+  const players = [...NET.players.values()];
+  const full = players.length >= capacityNum(NET.capacity);
+  const allReady = players.length > 0 && players.every((p) => p.ready);
+  if (full && allReady) hostStartRace();
+}
 
 lobbyEls.start.addEventListener("click", () => {
   if (NET.mode !== "host" || NET.started) return;
@@ -602,6 +732,7 @@ function attachNetHandlers() {
     removeParticipant(id);
   };
   net.onDown = () => {
+    if (matchmaking) return; // we're tearing down a probe, not losing a real host
     ui.banner("HOST LEFT", "rowing back to shore…", 2.4);
     setTimeout(() => location.reload(), 2600);
   };
@@ -628,14 +759,16 @@ function handleHostMsg(from, msg) {
   switch (msg.t) {
     case "hello": {
       if (NET.started) { net.sendTo(from, { t: "busy" }); return; }
+      if (NET.players.size >= capacityNum(NET.capacity)) { net.sendTo(from, { t: "full" }); return; }
       const p = { id: from, name: `Skipper ${from + 1}`, ready: false, cfg: null };
       NET.players.set(from, p);
       net.sendTo(from, {
-        t: "welcome", id: from,
+        t: "welcome", id: from, capacity: NET.capacity,
         players: [...NET.players.values()].map((q) => ({ id: q.id, name: q.name, ready: q.ready })),
       });
       net.broadcast({ t: "join", id: from, name: p.name }, from);
       updateLobbyUI();
+      maybeAutoStart();
       break;
     }
     case "ready": {
@@ -646,6 +779,7 @@ function handleHostMsg(from, msg) {
       p.name = msg.rock.name;
       net.broadcast({ t: "ready", id: from, name: p.name }, from);
       updateLobbyUI();
+      maybeAutoStart();
       break;
     }
     case "s":
@@ -674,19 +808,24 @@ function handleGuestMsg(msg) {
   switch (msg.t) {
     case "welcome":
       NET.myId = msg.id;
+      NET.capacity = msg.capacity ?? NET.capacity;
       NET.players.clear();
       for (const q of msg.players) NET.players.set(q.id, { id: q.id, name: q.name, ready: q.ready, cfg: null });
-      lobbyEls.code.textContent = `ROOM ${net.code.toUpperCase()}`;
-      lobbyEls.panel.classList.remove("hidden");
-      updateLobbyUI();
-      netStatus("");
-      ui.els.title.classList.add("hidden");
-      ui.wipe(() => enterFind());
+      settleIntoRoom();
       break;
     case "busy":
-      netStatus("that race already started — try hosting your own!");
-      net.close();
-      NET.mode = "solo";
+    case "full":
+      // this slot can't take us — keep hunting for another room
+      if (matchmaking) {
+        clearTimeout(matchmaking.helloTimer);
+        net.close();
+        matchmaking.idx++;
+        tryMatchSlot();
+      } else {
+        netStatus("that race already started — try again");
+        net.close();
+        NET.mode = "solo";
+      }
       break;
     case "join":
       NET.players.set(msg.id, { id: msg.id, name: msg.name, ready: false, cfg: null });
@@ -854,6 +993,7 @@ function enterNetReady() {
   if (NET.mode === "host") net.broadcast({ t: "ready", id: NET.myId, name: cfg.name });
   else net.send({ t: "ready", rock: cfg });
   updateLobbyUI();
+  maybeAutoStart();
 }
 
 function hostStartRace() {
@@ -867,7 +1007,7 @@ function hostStartRace() {
     }
   }
   const humans = [...NET.players.values()];
-  const botCount = Math.max(0, 8 - humans.length);
+  const botCount = Math.max(0, MAX_RACERS - humans.length);
   const bots = BOT_PERSONAS.slice(0, botCount).map((persona, i) => ({
     id: 100 + i, name: persona.name, color: persona.color, seed: 1000 + i * 77,
   }));
@@ -1088,7 +1228,11 @@ function setupHole(idx) {
   world.pontoon.setPose(tee.x, tee.z, Math.atan2(flag.z - tee.z, flag.x - tee.x));
   world.course.setHole(HOLES[idx].path, HOLES[idx].islands, HOLES[idx].rocks);
   minimap.bake(HOLES[idx].path, HOLES[idx].islands, HOLES[idx].rocks);
-  for (const s of G.racers) s.resetHole(tee.x, tee.z, 4);
+  for (const s of G.racers) {
+    s.resetHole(tee.x, tee.z, 4);
+    s.restY = PONTOON_DECK + 0.85; // opening lie is up on the pontoon deck
+  }
+  fishing.hideBuoy();
   for (const b of G.bots) {
     b.cooldown = 3.2 + Math.random() * 3.5; // let the intro flyover breathe
     b.fishAt = null;
@@ -1654,6 +1798,9 @@ function updateRace(dt) {
       back.y = 0;
       if (back.lengthSq() > 0.1) back.normalize();
       p.placeAt(spot.x + back.x * penalty, spot.z + back.z * penalty);
+      // the buoy parks under the new lie and the rock nestles into the ring
+      fishing.parkBuoy(p.pos.x, p.pos.z);
+      p.restY = BUOY_REST;
       particles.sinkSplash(p.pos, 0.8);
       audio.settle();
       const sc = worldToScreen(p.pos);
@@ -1776,4 +1923,4 @@ enterTitle();
 requestAnimationFrame(frame);
 
 // tiny hook for automated smoke tests (harmless in normal play)
-window.__skimmers = { G, selectCandidate, worldToScreen, cam, camRig, camera, THREE, HOLES, boats };
+window.__skimmers = { G, selectCandidate, worldToScreen, cam, camRig, camera, THREE, HOLES, boats, fishing };

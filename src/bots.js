@@ -37,8 +37,10 @@ export class BotBrain {
     // auto-fishing: bots take a skill-scaled break to reel their rock back
     if (s.state === "sinking" && s.sinkT > 0.8 && !this.fishAt) {
       this.fishAt = s.pos.clone();
-      // the lake bed is a bowl — deep mid-lake sinks cost more time, same as the player
-      this.fishT = 1.4 + lakeDepthAt(s.pos.x, s.pos.z) * 0.35 + (1 - this.p.skill) * 2.5 + Math.random() * 1.2;
+      // long enough for the full line choreography (sink to bed at
+      // ~depth/2.4, line down at HOOK_SPEED, reel up) plus skill-scaled
+      // dawdling at the surface — roughly what the player's minigame costs
+      this.fishT = 2.6 + lakeDepthAt(s.pos.x, s.pos.z) * 0.7 + (1 - this.p.skill) * 2.5 + Math.random() * 1.2;
       s.state = "fishing";
     }
     if (s.state === "fishing") {
