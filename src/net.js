@@ -10,7 +10,7 @@
  */
 import { Peer } from "peerjs";
 
-const ROOM_PREFIX = "skimmers-lake-";
+const ROOM_PREFIX = "skippidy-skip-";
 
 function peerIdForRoom(code) {
   return ROOM_PREFIX + code.toLowerCase();
@@ -22,6 +22,16 @@ export function makeRoomCode(len = 4) {
   let s = "";
   for (let i = 0; i < len; i++) s += alphabet[Math.floor(Math.random() * alphabet.length)];
   return s;
+}
+
+/**
+ * Deterministic "room code" for public matchmaking. Everyone hunting for a room
+ * of the same capacity converges on the same well-known slots (mm-<cap>-1,
+ * mm-<cap>-2, …), so we can pair up randoms over the shared PeerJS broker with
+ * no matchmaking server of our own. cap 0 means "open / unlimited".
+ */
+export function matchCode(capacity, idx) {
+  return `mm-${capacity}-${idx}`;
 }
 
 class PeerTransport {

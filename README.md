@@ -1,4 +1,4 @@
-# SKIMMERS — the rock-skipping race
+# Skippidy Skip — the rock-skipping race
 
 **First stone to the flag wins.** Find a rock, grind it flat, paint it, then
 skip it across a lake full of rivals, boats, islands and ducks.

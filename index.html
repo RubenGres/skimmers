@@ -3,7 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>SKIMMERS — rock skipping race</title>
+<title>Skippidy Skip — rock skipping race</title>
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+<meta name="theme-color" content="#0a2a3d">
 <style>
   :root {
     --ink: #16324a;
@@ -39,6 +43,17 @@
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 18px; z-index: 40; pointer-events: auto;
     background: radial-gradient(ellipse at 50% 120%, rgba(20,90,120,0.25), transparent 60%);
+  }
+  #game-logo {
+    width: clamp(300px, 72vw, 640px); height: auto;
+    filter: drop-shadow(0 12px 22px rgba(0,0,0,0.45));
+    transform: rotate(-3deg);
+    animation: logoBob 3.2s ease-in-out infinite;
+    pointer-events: none;
+  }
+  @keyframes logoBob {
+    0%, 100% { transform: rotate(-3deg) translateY(0); }
+    50%      { transform: rotate(-3deg) translateY(-10px); }
   }
   #title-screen .sub {
     font-size: clamp(14px, 2.4vw, 22px); color: var(--paper); font-weight: 700;
@@ -197,14 +212,24 @@
   .result-row .rname { flex: 1; }
   @keyframes rowIn { 0% { transform: translateX(-60px) scale(0.8); opacity: 0; } 100% { opacity: 1; } }
 
-  /* ---------- multiplayer lobby ---------- */
-  #mp-row { display: flex; gap: 10px; align-items: center; margin-top: 4px; }
-  #join-code {
-    width: 110px; text-align: center; font-family: inherit; font-weight: 900;
-    font-size: 20px; letter-spacing: 0.25em; text-transform: uppercase;
-    border: 3px solid var(--ink); border-radius: 14px; padding: 9px 6px;
-    background: var(--paper); color: var(--ink); outline: none;
+  /* ---------- title menu (solo / multiplayer) ---------- */
+  .menu-view { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+  .menu-label {
+    font-size: clamp(13px, 2vw, 17px); font-weight: 900; letter-spacing: 0.14em;
+    color: var(--paper); text-shadow: 0 2px 4px rgba(0,0,0,0.6); text-transform: uppercase;
   }
+  #room-sizes { display: flex; gap: 10px; }
+  .size-chip {
+    width: 58px; height: 58px; border-radius: 16px; border: 3px solid var(--ink);
+    background: var(--paper); color: var(--ink); font-family: inherit; font-weight: 900;
+    font-size: 26px; cursor: pointer; pointer-events: auto;
+    box-shadow: 0 4px 0 rgba(22,50,74,0.55); transition: transform 0.1s ease, background 0.1s ease;
+  }
+  .size-chip:hover { transform: translateY(-2px) scale(1.05); }
+  .size-chip.sel { background: var(--gold); transform: translateY(-2px) scale(1.08); }
+  #mp-actions { display: flex; gap: 12px; align-items: center; }
+
+  /* ---------- multiplayer lobby ---------- */
   #net-status { min-height: 22px; font-weight: 800; color: var(--gold);
     text-shadow: 0 2px 4px rgba(0,0,0,0.6); font-size: 15px; }
   #lobby-panel {
@@ -311,14 +336,31 @@
 
 <!-- title -->
 <div id="title-screen" class="layer">
-  <div class="bigtitle">SKIMMERS</div>
-  <div class="sub">the rock-skipping race &nbsp;·&nbsp; first stone to the flag</div>
-  <button id="play-btn" class="btn">Skip it! (solo)</button>
-  <div id="mp-row">
-    <button id="host-btn" class="btn small blue">Host a lobby</button>
-    <input id="join-code" maxlength="4" placeholder="CODE" autocomplete="off">
-    <button id="join-btn" class="btn small blue">Join</button>
+  <img id="game-logo" src="media/logo.png" alt="Skippidy Skip" draggable="false">
+
+  <!-- main choice -->
+  <div id="menu-main" class="menu-view">
+    <button id="play-btn" class="btn">Solo</button>
+    <button id="mp-btn" class="btn blue">Multiplayer</button>
   </div>
+
+  <!-- multiplayer: pick a room size, then matchmake with randoms -->
+  <div id="menu-mp" class="menu-view hidden">
+    <div class="menu-label">how many skippers?</div>
+    <div id="room-sizes">
+      <button class="size-chip" data-cap="1">1</button>
+      <button class="size-chip" data-cap="2">2</button>
+      <button class="size-chip" data-cap="3">3</button>
+      <button class="size-chip" data-cap="4">4</button>
+      <button class="size-chip" data-cap="0">∞</button>
+    </div>
+    <div id="mp-actions">
+      <button id="mp-back" class="btn small">← Back</button>
+      <button id="find-btn" class="btn blue">Find match</button>
+    </div>
+    <button id="mp-cancel" class="btn small hidden">Cancel search</button>
+  </div>
+
   <div id="net-status"></div>
 </div>
 
@@ -357,12 +399,6 @@
 </button>
 <div id="wipe" class="layer"></div>
 
-<script type="importmap">
-{ "imports": {
-  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-  "peerjs": "https://cdn.jsdelivr.net/npm/peerjs@1.5.4/+esm"
-} }
-</script>
-<script type="module" src="src/main.js"></script>
+<script type="module" src="/src/main.js"></script>
 </body>
 </html>

@@ -7,12 +7,15 @@
  */
 import * as THREE from "three";
 import { audio } from "./audio.js";
-import { lakeDepthAt } from "./water.js";
+import { lakeDepthAt, WATER_Y } from "./water.js";
 import { els } from "./ui.js";
 
 const ROCK_Y = 0.55; // local y of the rock on the bed
 export const HOOK_SPEED = 2.0;
 const STEER_RANGE = 8.5;
+export const BUOY_REST = 0.42; // rock center height above the waterline when nestled in the buoy
+
+const _tip = new THREE.Vector3();
 
 const FISH_COLORS = [0xffa63d, 0x37c8e0, 0xff5470, 0x9d7cf4, 0xffd24a, 0x6fe07a];
 
@@ -38,12 +41,40 @@ function makeFish(color) {
 }
 
 export class Fishing {
-  constructor(scene, particles) {
+  constructor(scene, particles, water) {
     this.scene = scene;
     this.particles = particles;
+    this.water = water;
     this.active = false;
     this.onDone = null;
     this.rock = null;
+
+    // ---------- the buoy: a small inflatable ring carrying the line ----
+    // Scene-level, NOT part of the diorama group — it stays behind after the
+    // dive so the reeled-in rock has somewhere to sit for the next throw.
+    const buoy = new THREE.Group();
+    this.buoy = buoy;
+    buoy.visible = false;
+    scene.add(buoy);
+    const ringGrp = new THREE.Group();
+    ringGrp.rotation.x = Math.PI / 2; // lay the torus flat
+    ringGrp.position.y = 0.12;
+    buoy.add(ringGrp);
+    const ringMat = new THREE.MeshStandardMaterial({ color: 0xff5a3c, flatShading: true });
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.85, 0.34, 10, 18), ringMat);
+    ringGrp.add(ring);
+    // classic lifebuoy patches, a slightly fatter tube so they sit proud
+    const patchMat = new THREE.MeshStandardMaterial({ color: 0xf4f0e6, flatShading: true });
+    for (let i = 0; i < 4; i++) {
+      const patch = new THREE.Mesh(new THREE.TorusGeometry(0.85, 0.36, 10, 4, Math.PI / 6), patchMat);
+      patch.rotation.z = i * (Math.PI / 2) - Math.PI / 12;
+      ringGrp.add(patch);
+    }
+    // the line ties straight off the ring's bow edge
+    this.lineAnchor = new THREE.Object3D();
+    this.lineAnchor.position.set(0, 0.4, 0.8);
+    buoy.add(this.lineAnchor);
+    this.buoyPhase = Math.random() * 10;
 
     // UI
     this.el = document.getElementById("fishing-ui");
@@ -51,7 +82,6 @@ export class Fishing {
     // fake pendulum state for the line/hook swing
     this.swingAng = 0;
     this.swingVel = 0;
-    this.anchorX = 0;
     this.prevHookX = 0;
 
     // ---------- diorama (built once, hidden) ----------
@@ -198,6 +228,11 @@ export class Fishing {
     this.group.position.set(spot.x, this.floorY, spot.z);
     this.group.visible = true;
 
+    // buoy bobs on the surface above; the line drops from its bow edge
+    this.buoy.position.set(spot.x, WATER_Y, spot.z - 0.9);
+    this.buoy.rotation.set(0, 0, 0);
+    this.buoy.visible = true;
+
     // shape the sandy bed to the real bowl around this spot: each vertex sits
     // at the actual lake-bed height relative to the diorama origin, so the
     // ground visibly curves upward toward the shore side
@@ -225,7 +260,6 @@ export class Fishing {
     this._tickY = this.hookStart;
     this.swingAng = 0;
     this.swingVel = 0;
-    this.anchorX = 0;
     this.prevHookX = 0;
 
     // deeper water = more fish in the gauntlet, lanes squeezed to the depth
@@ -260,6 +294,14 @@ export class Fishing {
 
   /** pointerX01: pointer x in [0,1] across the screen */
   update(dt, elapsed, pointerX01 = 0.5) {
+    // the buoy rides the real wave field whether we're fishing or it's
+    // parked as the player's lie after a catch — inflatables bob lively
+    if (this.buoy.visible) {
+      const bp = this.buoy.position;
+      bp.y = WATER_Y + this.water.heightAt(bp.x, bp.z, elapsed);
+      this.buoy.rotation.z = Math.sin(elapsed * 1.1 + this.buoyPhase) * 0.06;
+      this.buoy.rotation.x = Math.cos(elapsed * 1.4 + this.buoyPhase) * 0.05;
+    }
     if (!this.active) return;
     this.backMat.uniforms.uTime.value = elapsed;
 
@@ -322,12 +364,13 @@ export class Fishing {
         this.lineMesh.visible = true;
         this.hookY = this.hookStart;
         this._tickY = this.hookStart;
-        // lay the rope straight down before the verlet sim takes over
-        const topY = this.depth + 6, botY = this.hookStart + 0.45;
+        // lay the rope straight from the buoy's bow before the verlet sim takes over
+        const tip = this._lineTopLocal();
+        const botY = this.hookStart + 0.45;
         this.ropePts.forEach((p, i) => {
           const t = i / (this.ropeN - 1);
-          p.x = p.px = 0;
-          p.y = p.py = topY + (botY - topY) * t;
+          p.x = p.px = tip.x * (1 - t);
+          p.y = p.py = tip.y + (botY - tip.y) * t;
         });
         audio.settle();
         // a puff of sand where it lands
@@ -401,17 +444,22 @@ export class Fishing {
       if (this.hookY >= this.hookStart + 2.5) this._finish(this.hits === 0);
     }
 
-    // hook transform + verlet rope between the rod tip and the hook
-    this.anchorX += (dispX * 0.85 - this.anchorX) * Math.min(1, 3.2 * dt);
+    // hook transform + verlet rope between the buoy's bow and the hook
     this.hook.position.set(dispX, this.hookY, 0);
     this.hook.rotation.z = this.swingAng * 1.25;
-    this._updateRope(Math.min(dt, 1 / 30), dispX);
+    const tip = this._lineTopLocal();
+    this._updateRope(Math.min(dt, 1 / 30), dispX, tip.x, tip.y);
   }
 
-  _updateRope(dt, dispX) {
+  /** the line's tie-off point in diorama-local coords (the rope's 2D x/y plane) */
+  _lineTopLocal() {
+    this.lineAnchor.getWorldPosition(_tip);
+    return { x: _tip.x - this.group.position.x, y: _tip.y - this.group.position.y };
+  }
+
+  _updateRope(dt, dispX, topX, topY) {
     const pts = this.ropePts;
     const n = this.ropeN;
-    const topX = this.anchorX, topY = this.depth + 6; // rod tip above the surface
     const botX = dispX, botY = this.hookY + 0.45;
 
     // verlet integrate the free middle points (gravity + inertia)
@@ -467,8 +515,19 @@ export class Fishing {
     this.group.visible = false;
     this.el.classList.add("hidden");
     els.throwUi.classList.remove("hidden");
-    // hand the rock back to the game (main repositions it via placeAt)
+    // hand the rock back to the game (main repositions it via placeAt);
+    // the buoy stays out — main parks it under the new lie
     this.onDone?.(clean, this.hits);
+  }
+
+  /** after the catch the buoy drifts under the drop spot and becomes the lie */
+  parkBuoy(x, z) {
+    this.buoy.position.x = x;
+    this.buoy.position.z = z;
+  }
+
+  hideBuoy() {
+    this.buoy.visible = false;
   }
 
   /** abort without result (hole was decided while we fished) */
@@ -476,6 +535,7 @@ export class Fishing {
     if (!this.active) return;
     this.active = false;
     this.group.visible = false;
+    this.buoy.visible = false;
     this.el.classList.add("hidden");
     els.throwUi.classList.remove("hidden");
   }

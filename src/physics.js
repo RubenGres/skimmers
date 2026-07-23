@@ -53,6 +53,8 @@ export class Skimmer {
     this.lastThrowMode = "skip";
     this.sinkT = 0;
     this.bobPhase = Math.random() * 10;
+    this.restY = 0.06; // rest height above the waves (raised on the buoy / tee bridge)
+    this.hookedByLine = false; // a rival fishing line is reeling this stone up
     this.knocked = false; // sunk because a rival splashed us
     this.onEvent = null; // (type, data) => {}
     // networking
@@ -70,6 +72,8 @@ export class Skimmer {
     this.pos.set(x, WATER_Y + 0.1, z);
     this.vel.set(0, 0, 0);
     this.state = "resting";
+    this.restY = 0.06;
+    this.hookedByLine = false;
     this.boat = null;
     this.mesh.position.copy(this.pos);
   }
@@ -94,7 +98,8 @@ export class Skimmer {
     const speed = MAX_SPEED * (0.28 + 0.72 * power) * (mode === "skip" ? 1 : 0.68);
     const cosE = Math.cos(elev), sinE = Math.sin(elev);
     this.vel.set(dirXZ.x * cosE * speed, sinE * speed, dirXZ.z * cosE * speed);
-    this.pos.y = WATER_Y + 0.5;
+    this.pos.y = Math.max(this.pos.y, WATER_Y + 0.5); // buoy/bridge lies launch from their height
+    this.restY = 0.06;
     this.state = "flying";
     this.skips = 0;
     this.throws++;
@@ -265,16 +270,21 @@ export class Skimmer {
 
       case "fishing": {
         // keep drifting down until the stone rests on the lake bed — visible
-        // to anyone who dives nearby
-        const bed = -lakeDepthAt(this.pos.x, this.pos.z) + 0.4;
-        if (this.pos.y > bed) this.pos.y = Math.max(bed, this.pos.y - dt * 1.6);
+        // to anyone who dives nearby. Same pace as the player's diorama fall,
+        // so deep sinks don't stall the rival-line choreography. Once a rival
+        // line hooks it, RivalLines owns pos.y for the reel-up.
+        if (!this.hookedByLine) {
+          const depth = lakeDepthAt(this.pos.x, this.pos.z);
+          const bed = -depth + 0.4;
+          if (this.pos.y > bed) this.pos.y = Math.max(bed, this.pos.y - dt * Math.max(2, depth / 2.4));
+        }
         break;
       }
 
       case "resting": {
-        // bob on the waves
+        // bob on the waves (restY lifts this onto the buoy / tee bridge)
         const wy = WATER_Y + water.heightAt(this.pos.x, this.pos.z, elapsed);
-        this.pos.y = wy + 0.06 + Math.sin(elapsed * 2 + this.bobPhase) * 0.02;
+        this.pos.y = wy + this.restY + Math.sin(elapsed * 2 + this.bobPhase) * 0.02;
         break;
       }
 
@@ -388,6 +398,7 @@ export class Skimmer {
     _tmp.normalize();
     this.vel.set(_tmp.x * 6, 4.5, _tmp.z * 6);
     this.pos.y += 0.3;
+    this.restY = 0.06; // blown clean off the buoy, if we were on one
     this.state = "flying"; // brief tumble...
     this.knocked = true; // ...then _waterContact turns steep entry into a sink
     this.lastThrowMode = "knocked";
